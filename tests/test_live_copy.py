@@ -7,7 +7,8 @@ import tempfile
 import pytest
 
 from data import migrations
-from services import backup, startup
+from services import backup, review, startup
+from services import people as people_service
 
 LIVE_COPY = os.environ.get(
     "NT_LIVE_COPY", os.path.join(tempfile.gettempdir(), "nt-build", "live-copy.db"))
@@ -60,4 +61,42 @@ def test_live_copy_rerun_is_a_noop_and_old_code_is_blocked(copy):
     c = sqlite3.connect(copy)
     with pytest.raises(sqlite3.IntegrityError, match="out of date"):
         c.execute("UPDATE people SET first_name = first_name WHERE id = (SELECT MIN(id) FROM people)")
+    c.close()
+
+
+def test_live_copy_everyone_gets_a_fund_in_one_batch_and_review_list_matches(copy):
+    c = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+    people_n = c.execute("SELECT COUNT(*) FROM people WHERE COALESCE(active, 1) = 1").fetchone()[0]
+    maap_rows = c.execute(
+        "SELECT COUNT(*) FROM subscriptions s JOIN newsletters n ON n.id = s.newsletter_id "
+        "JOIN people p ON p.id = s.person_id WHERE lower(n.name) LIKE 'maap%' AND s.quantity = 1 "
+        "AND s.active = 1 AND COALESCE(p.active, 1) = 1").fetchone()[0]
+    legacy_before = c.execute("SELECT * FROM subscriptions ORDER BY id").fetchall()
+    c.close()
+
+    s = startup.open_session(copy)
+    try:
+        conn = s.conn
+        fund = conn.execute("SELECT id FROM funds WHERE name = 'MAAP'").fetchone()[0]
+        ids = [r["id"] for r in people_service.list_people(conn)]
+        assert len(ids) == people_n
+        result = people_service.set_fund(conn, ids, fund)
+        assert result["changed"] == people_n
+        assert conn.execute("SELECT COUNT(*) FROM people WHERE fund_id IS NULL "
+                            "AND COALESCE(active, 1) = 1").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM activity_log WHERE action = 'fund.set_bulk'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM activity_log WHERE action = 'fund.set'").fetchone()[0] == people_n
+
+        assert review.copy_legacy(conn) == maap_rows
+        assert review.pending_count(conn) == maap_rows
+        assert len(review.pending_rows(conn)) == maap_rows
+        assert review.move_pending(conn, None)["moved"] == maap_rows
+        assert review.pending_count(conn) == 0
+        assert review.undo_move(conn, review.last_move(conn)["id"])["restored"] == maap_rows
+        assert review.pending_count(conn) == maap_rows
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        s.close()
+    c = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+    assert c.execute("SELECT * FROM subscriptions ORDER BY id").fetchall() == legacy_before
     c.close()

@@ -1,6 +1,8 @@
 import os
 import sys
 
+import tkinter as tk
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,6 +16,29 @@ def sandbox(tmp_path, monkeypatch):
     """Keeps backups and settings inside the test's temp folder."""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+
+
+@pytest.fixture(scope="session")
+def _tk_root():
+    # One Tk for the whole run: creating a second one in the same process can fail on this setup.
+    try:
+        r = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display available")
+    r.withdraw()
+    yield r
+    try:
+        r.destroy()
+    except tk.TclError:
+        pass
+
+
+@pytest.fixture
+def root(_tk_root):
+    yield _tk_root
+    for w in _tk_root.winfo_children():
+        w.destroy()
+    _tk_root.config(menu=tk.Menu(_tk_root))
 
 
 @pytest.fixture

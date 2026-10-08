@@ -13,3 +13,11 @@ def log(conn, action, summary="", entity_type=None, entity_id=None, parent_id=No
             (now(), getpass.getuser(), APP_VERSION, action, entity_type, entity_id, summary, parent_id),
         )
     return cur.lastrowid
+
+
+def recent(conn, limit=200):
+    return conn.execute("SELECT * FROM activity_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+def set_summary(conn, log_id, summary):
+    conn.execute("UPDATE activity_log SET summary = ? WHERE id = ?", (summary, log_id))

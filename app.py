@@ -9,197 +9,8 @@ import exporter
 from data import activity
 from services import backup
 from ui.chrome import Chrome
-
-RECIPIENT_TYPES = ["Member", "Rep", "Church", "Other"]
-
-PERSON_FIELDS = [
-    ("first_name", "First Name"),
-    ("middle_name", "Middle Name"),
-    ("last_name", "Last Name"),
-    ("recipient_type", "Type"),
-    ("church_name", "Church Name"),
-    ("conference", "Conference"),
-    ("title", "Title"),
-    ("address1", "Address 1"),
-    ("address2", "Address 2"),
-    ("city", "City"),
-    ("state", "State"),
-    ("zip", "Zip"),
-    ("home_phone", "Home Phone"),
-    ("cell_phone", "Cell Phone"),
-    ("email", "Email"),
-    ("notes", "Notes"),
-]
-
-
-class PersonDialog(tk.Toplevel):
-    def __init__(self, master, conn, person=None):
-        super().__init__(master)
-        self.conn = conn
-        self.person = person
-        self.result = False
-        self.title("Edit Recipient" if person else "Add Recipient")
-        self.resizable(False, False)
-        self.vars = {}
-
-        form = ttk.Frame(self, padding=12)
-        form.pack(fill="both", expand=True)
-
-        for i, (field, label) in enumerate(PERSON_FIELDS):
-            ttk.Label(form, text=label + ":").grid(row=i, column=0, sticky="e", padx=4, pady=3)
-            current = person[field] if person else ""
-            if field == "recipient_type":
-                var = tk.StringVar(value=current or "Member")
-                widget = ttk.Combobox(form, textvariable=var, values=RECIPIENT_TYPES, width=27, state="readonly")
-            else:
-                var = tk.StringVar(value=current or "")
-                widget = ttk.Entry(form, textvariable=var, width=30)
-            widget.grid(row=i, column=1, sticky="w", padx=4, pady=3)
-            self.vars[field] = var
-
-        btns = ttk.Frame(form)
-        btns.grid(row=len(PERSON_FIELDS), column=0, columnspan=2, pady=(10, 0))
-        ttk.Button(btns, text="Save", command=self.on_save).pack(side="left", padx=4)
-        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
-
-        self.transient(master)
-        self.grab_set()
-
-    def on_save(self):
-        data = {field: self.vars[field].get().strip() for field, _ in PERSON_FIELDS}
-        if not data["first_name"] and not data["last_name"]:
-            messagebox.showerror("Missing name", "Enter at least a first or last name.", parent=self)
-            return
-        data["active"] = 1
-        person_id = self.person["id"] if self.person else None
-        db.upsert_person(self.conn, data, person_id)
-        self.result = True
-        self.destroy()
-
-
-class RecipientsTab(ttk.Frame):
-    def __init__(self, master, conn, on_change=None):
-        super().__init__(master, padding=8)
-        self.conn = conn
-        self.on_change = on_change
-        self._build()
-        self.refresh()
-
-    def _build(self):
-        top = ttk.Frame(self)
-        top.pack(fill="x", pady=(0, 6))
-
-        ttk.Label(top, text="Search:").pack(side="left")
-        self.search_var = tk.StringVar()
-        entry = ttk.Entry(top, textvariable=self.search_var, width=30)
-        entry.pack(side="left", padx=4)
-        entry.bind("<KeyRelease>", lambda e: self.refresh())
-
-        ttk.Label(top, text="Type:").pack(side="left", padx=(10, 0))
-        self.type_var = tk.StringVar(value="All")
-        type_box = ttk.Combobox(top, textvariable=self.type_var, values=["All"] + RECIPIENT_TYPES,
-                                 width=10, state="readonly")
-        type_box.pack(side="left", padx=4)
-        type_box.bind("<<ComboboxSelected>>", lambda e: self.refresh())
-
-        ttk.Label(top, text="State:").pack(side="left", padx=(10, 0))
-        self.state_var = tk.StringVar(value="All")
-        self.state_box = ttk.Combobox(top, textvariable=self.state_var, width=6, state="readonly")
-        self.state_box.pack(side="left", padx=4)
-        self.state_box.bind("<<ComboboxSelected>>", lambda e: self.refresh())
-
-        ttk.Button(top, text="Add", command=self.add_person).pack(side="right", padx=2)
-        ttk.Button(top, text="Edit", command=self.edit_person).pack(side="right", padx=2)
-        ttk.Button(top, text="Delete", command=self.delete_person).pack(side="right", padx=2)
-
-        columns = ("name", "type", "church", "conference", "title", "city", "state", "phone", "email")
-        headers = ["Name", "Type", "Church", "Conference", "Title", "City", "State", "Phone", "Email"]
-        tree_frame = ttk.Frame(self)
-        tree_frame.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="extended")
-        for col, head in zip(columns, headers):
-            self.tree.heading(col, text=head)
-            self.tree.column(col, width=110, anchor="w")
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        tree_frame.rowconfigure(0, weight=1)
-        tree_frame.columnconfigure(0, weight=1)
-        self.tree.bind("<Double-1>", lambda e: self.edit_person())
-
-        self.count_label = ttk.Label(self, text="")
-        self.count_label.pack(anchor="w", pady=(4, 0))
-
-    def refresh(self):
-        states = ["All"] + db.distinct_states(self.conn)
-        self.state_box["values"] = states
-        if self.state_var.get() not in states:
-            self.state_var.set("All")
-
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        people = db.list_people(self.conn, self.search_var.get().strip(),
-                                  self.type_var.get(), self.state_var.get())
-        for p in people:
-            name = " ".join(filter(None, [p["first_name"], p["last_name"]]))
-            self.tree.insert("", "end", iid=str(p["id"]), values=(
-                name, p["recipient_type"] or "", p["church_name"] or "", p["conference"] or "",
-                p["title"] or "", p["city"] or "", p["state"] or "", p["cell_phone"] or p["home_phone"] or "",
-                p["email"] or "",
-            ))
-        self.count_label.config(text=f"{len(people)} recipient(s)")
-        if self.on_change:
-            self.on_change()
-
-    def selected_id(self):
-        sel = self.tree.selection()
-        return int(sel[0]) if sel else None
-
-    def selected_ids(self):
-        return [int(i) for i in self.tree.selection()]
-
-    def add_person(self):
-        dlg = PersonDialog(self, self.conn)
-        self.wait_window(dlg)
-        if dlg.result:
-            self.refresh()
-
-    def edit_person(self):
-        pid = self.selected_id()
-        if not pid:
-            messagebox.showinfo("Select a recipient", "Choose a row first.")
-            return
-        person = db.get_person(self.conn, pid)
-        dlg = PersonDialog(self, self.conn, person)
-        self.wait_window(dlg)
-        if dlg.result:
-            self.refresh()
-
-    def delete_person(self):
-        ids = self.selected_ids()
-        if not ids:
-            messagebox.showinfo("Select a recipient", "Choose one or more rows first.")
-            return
-        total_nl, total_copies = 0, 0
-        for pid in ids:
-            nl_count, copies = db.person_subscriptions_summary(self.conn, pid)
-            total_nl += nl_count
-            total_copies += copies
-        who = "this person" if len(ids) == 1 else f"these {len(ids)} people"
-        detail = f" This will also remove them from {total_nl} newsletter subscription(s) ({total_copies} copies total)." \
-            if total_nl else ""
-        title = "Delete recipient" if len(ids) == 1 else "Delete recipients"
-        if messagebox.askyesno(title, f"Remove {who}?{detail} This cannot be undone."):
-            backup.backup_both(self.conn.db_path, "before-delete")
-            with db.transaction(self.conn):
-                for pid in ids:
-                    db.delete_person(self.conn, pid)
-                if len(ids) > 1:
-                    activity.log(self.conn, "person.bulk_delete", f"Deleted {len(ids)} people")
-            self.refresh()
+from ui.people_tab import PeopleTab
+from ui.setup_tab import SetupTab
 
 
 class PickRecipientsDialog(tk.Toplevel):
@@ -406,14 +217,10 @@ class NewslettersTab(ttk.Frame):
         if not nl:
             return
         recipients, copies = db.subscription_totals(self.conn, nl["id"])
-        warning = ""
-        if nl["name"] in dict(db.DEFAULT_NEWSLETTERS):
-            warning = ("\n\nNote: this is one of the built-in starter newsletters and will be "
-                       "recreated automatically (empty) the next time the app is opened.")
         if messagebox.askyesno(
             "Delete Newsletter",
             f"Delete '{nl['name']}'? This will remove {recipients} recipient(s) "
-            f"({copies} copies total). This cannot be undone.{warning}",
+            f"({copies} copies total). This cannot be undone.",
         ):
             db.delete_newsletter(self.conn, nl["id"])
             self.refresh_newsletters()
@@ -618,21 +425,37 @@ class App(ttk.Frame):
         super().__init__(master)
         conn = self.conn = session.conn
         master.title(f"Newsletter Tracker — {session.db_path}")
-        master.geometry("1000x600")
+        master.geometry("1200x700")
         self.pack(fill="both", expand=True)
         self.chrome = Chrome(master, self, session)
 
-        notebook = ttk.Notebook(self)
+        find_bar = ttk.Frame(self)
+        find_bar.pack(fill="x", padx=6, pady=(4, 0))
+        ttk.Label(find_bar, text="Find:").pack(side="left")
+        self.find_var = tk.StringVar()
+        ttk.Entry(find_bar, textvariable=self.find_var, width=40).pack(side="left", padx=4)
+        ttk.Button(find_bar, text="Clear", command=lambda: self.find_var.set("")).pack(side="left")
+
+        self.notebook = notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
 
-        self.newsletters_tab = NewslettersTab(notebook, conn)
-        self.recipients_tab = RecipientsTab(notebook, conn, on_change=self.newsletters_tab.refresh_newsletters)
-        self.import_tab = ImportTab(notebook, conn, on_imported=self._on_imported)
+        self.people_tab = PeopleTab(notebook, conn, self.find_var)
+        self.mailings_tab = NewslettersTab(notebook, conn)
+        self.setup_tab = SetupTab(notebook, conn)
+        self.import_tab = ImportTab(self.setup_tab, conn, on_imported=self.people_tab.refresh)
+        self.setup_tab.insert(2, self.import_tab, text="Import")
 
-        notebook.add(self.recipients_tab, text="Recipients")
-        notebook.add(self.newsletters_tab, text="Newsletters")
-        notebook.add(self.import_tab, text="Import")
+        notebook.add(self.people_tab, text="People & Churches")
+        notebook.add(self.mailings_tab, text="Mailings")
+        notebook.add(self.setup_tab, text="Setup")
+        notebook.bind("<<NotebookTabChanged>>", lambda e: self._tab_changed())
+        self.find_var.trace_add("write", lambda *a: notebook.select(self.people_tab))
 
-    def _on_imported(self):
-        self.recipients_tab.refresh()
-        self.newsletters_tab.refresh_newsletters()
+    def _tab_changed(self):
+        tab = self.nametowidget(self.notebook.select())
+        if tab is self.mailings_tab:
+            tab.refresh_newsletters()
+        elif tab is self.setup_tab:
+            tab.refresh()
+        elif tab is self.people_tab:
+            tab.refresh()

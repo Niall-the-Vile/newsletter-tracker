@@ -26,34 +26,8 @@ PEOPLE_COLUMNS = [
 
 # ---------- People ----------
 
-def list_people(conn, search="", recipient_type="All", state="All"):
-    query = "SELECT * FROM people WHERE 1=1"
-    params = []
-    if search:
-        query += (
-            " AND (COALESCE(first_name,'') || ' ' || COALESCE(middle_name,'') || ' ' || COALESCE(last_name,'') || ' ' "
-            "|| COALESCE(church_name,'') || ' ' || COALESCE(conference,'') LIKE ?)"
-        )
-        params.append(f"%{search}%")
-    if recipient_type != "All":
-        query += " AND recipient_type = ?"
-        params.append(recipient_type)
-    if state != "All":
-        query += " AND state = ?"
-        params.append(state)
-    query += " ORDER BY last_name, first_name"
-    return conn.execute(query, params).fetchall()
-
-
 def get_person(conn, person_id):
     return conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
-
-
-def distinct_states(conn):
-    rows = conn.execute(
-        "SELECT DISTINCT state FROM people WHERE state IS NOT NULL AND state != '' ORDER BY state"
-    ).fetchall()
-    return [r["state"] for r in rows]
 
 
 def upsert_person(conn, data, person_id=None):
@@ -96,12 +70,6 @@ def find_duplicate_person(conn, first_name, last_name, address1, zip_code):
         if _normalize_match(row["address1"]) == addr_norm and (row["zip"] or "")[:5] == zip5:
             return row
     return None
-
-
-def delete_person(conn, person_id):
-    with transaction(conn):
-        conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
-        activity.log(conn, "person.delete", "Deleted a person", "person", person_id)
 
 
 def person_subscriptions_summary(conn, person_id):
@@ -149,7 +117,7 @@ def list_subscribers(conn, newsletter_id, search=""):
     query = (
         "SELECT s.id AS sub_id, s.quantity, s.active AS sub_active, s.notes AS sub_notes, p.* "
         "FROM subscriptions s JOIN people p ON p.id = s.person_id "
-        "WHERE s.newsletter_id = ?"
+        "WHERE s.newsletter_id = ? AND COALESCE(p.active, 1) = 1"
     )
     params = [newsletter_id]
     if search:
@@ -164,8 +132,9 @@ def list_subscribers(conn, newsletter_id, search=""):
 
 def subscription_totals(conn, newsletter_id):
     row = conn.execute(
-        "SELECT COUNT(*) AS recipients, COALESCE(SUM(quantity),0) AS copies "
-        "FROM subscriptions WHERE newsletter_id = ? AND active = 1",
+        "SELECT COUNT(*) AS recipients, COALESCE(SUM(s.quantity),0) AS copies "
+        "FROM subscriptions s JOIN people p ON p.id = s.person_id "
+        "WHERE s.newsletter_id = ? AND s.active = 1 AND COALESCE(p.active, 1) = 1",
         (newsletter_id,),
     ).fetchone()
     return row["recipients"], row["copies"]
@@ -173,7 +142,7 @@ def subscription_totals(conn, newsletter_id):
 
 def people_not_subscribed(conn, newsletter_id, search=""):
     query = (
-        "SELECT * FROM people WHERE id NOT IN "
+        "SELECT * FROM people WHERE COALESCE(active, 1) = 1 AND id NOT IN "
         "(SELECT person_id FROM subscriptions WHERE newsletter_id = ?)"
     )
     params = [newsletter_id]

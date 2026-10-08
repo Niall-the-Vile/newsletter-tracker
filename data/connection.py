@@ -23,6 +23,11 @@ class Conn(sqlite3.Connection):
     data_version = None  # last meta.data_version this copy saw
 
 
+def require_writable(conn):
+    if conn.read_only:
+        raise ReadOnlyError("This copy is open for viewing only, so nothing can be changed.")
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
