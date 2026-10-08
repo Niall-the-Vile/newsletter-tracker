@@ -121,11 +121,13 @@ def rename_newsletter(conn, newsletter_id, new_name, description=""):
 
 
 def delete_newsletter(conn, newsletter_id):
-    """Deletes a newsletter nothing was ever sent from. Otherwise archives it, so saved mailings keep their link."""
+    """Deletes a newsletter with no history at all. Otherwise archives it, so nothing on record is lost."""
     with transaction(conn):
         used = conn.execute(
             "SELECT EXISTS (SELECT 1 FROM mailing_runs WHERE newsletter_id = ?) "
-            "OR EXISTS (SELECT 1 FROM subscriptions_v2 WHERE newsletter_id = ?)", (newsletter_id, newsletter_id)
+            "OR EXISTS (SELECT 1 FROM subscriptions_v2 WHERE newsletter_id = ?) "
+            "OR EXISTS (SELECT 1 FROM subscriptions WHERE newsletter_id = ?)",
+            (newsletter_id, newsletter_id, newsletter_id)
         ).fetchone()[0]
         if used:
             conn.execute("UPDATE newsletters SET archived = 1 WHERE id = ?", (newsletter_id,))

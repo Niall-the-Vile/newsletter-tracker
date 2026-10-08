@@ -184,3 +184,51 @@ def test_restore_refuses_a_newer_backup(legacy_db, tmp_path):
     c.close()
     with pytest.raises(migrations.NewerVersionError):
         backup.restore_backup(path, other)
+
+
+def test_newsletter_with_old_subscriptions_cannot_be_hard_deleted(legacy_db):
+    path, _ = legacy_db
+    s = startup.open_session(path)
+    try:
+        assert db.delete_newsletter(s.conn, 1) == "archived"
+        assert s.conn.execute("SELECT archived FROM newsletters WHERE id = 1").fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError, match="Archive it instead"):
+            s.conn.execute("DELETE FROM newsletters WHERE id = 1")
+        legacy_before = s.conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0]
+        db.add_newsletter(s.conn, "Spare")
+        spare = s.conn.execute("SELECT id FROM newsletters WHERE name = 'Spare'").fetchone()[0]
+        assert db.delete_newsletter(s.conn, spare) == "deleted"
+        assert s.conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0] == legacy_before
+    finally:
+        s.close()
+
+
+def test_saved_mailings_cannot_be_edited_or_deleted(session):
+    conn = session.conn
+    nid = conn.execute("SELECT id FROM newsletters LIMIT 1").fetchone()[0]
+    conn.execute("INSERT INTO mailing_runs (newsletter_id, newsletter_name, issue_label, channel, sent_on) "
+                 "VALUES (?, 'N', 'Fall', 'Print', '2026-01-01')", (nid,))
+    run = conn.execute("SELECT id FROM mailing_runs").fetchone()[0]
+    conn.execute("INSERT INTO mailing_run_rows (run_id, recipient_name, quantity) VALUES (?, 'Fake', 2)", (run,))
+    for sql in ("UPDATE mailing_runs SET issue_label = 'Other'", "UPDATE mailing_runs SET row_count = 9",
+                "DELETE FROM mailing_runs", "UPDATE mailing_run_rows SET quantity = 3",
+                "UPDATE mailing_run_rows SET address1 = 'X'", "DELETE FROM mailing_run_rows"):
+        with pytest.raises(sqlite3.IntegrityError, match="cannot be"):
+            conn.execute(sql)
+    conn.execute("UPDATE mailing_runs SET status = 'sent'")
+    conn.execute("UPDATE mailing_run_rows SET send_status = 'sent'")
+    assert conn.execute("SELECT status FROM mailing_runs").fetchone()[0] == "sent"
+    with pytest.raises(sqlite3.IntegrityError, match="Archive it instead"):
+        conn.execute("DELETE FROM newsletters WHERE id = ?", (nid,))
+
+
+def test_upgrade_from_version_six_adds_the_guards(legacy_db):
+    path, _ = legacy_db
+    c = connect(path)
+    migrations.migrate(c, migrations.STEPS[:6])
+    assert migrations.get_version(c) == 6
+    assert migrations.migrate(c) == [7]
+    names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+    assert {"newsletters_keep_when_used", "mailing_runs_keep_history", "mailing_run_rows_keep_history",
+            "mailing_runs_no_delete", "mailing_run_rows_no_delete"} <= names
+    c.close()

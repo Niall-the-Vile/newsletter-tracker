@@ -14,6 +14,7 @@ import db
 from app import App
 from services import churches, diagnostics, errors, health, newsletters, people
 from tests import factories
+from data.migrations import SCHEMA_VERSION
 from version import APP_VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -257,7 +258,7 @@ def test_diagnostics_text_has_the_five_facts(session):
     text = diagnostics.diagnostics_text(session)
     assert f"Newsletter Tracker {APP_VERSION}" in text
     assert f"Data file: {session.db_path}" in text
-    assert "Data file version: 6" in text
+    assert f"Data file version: {SCHEMA_VERSION}" in text
     assert "Editing: this copy is editing" in text
     assert "Last backup: " in text and "none yet" not in text
 

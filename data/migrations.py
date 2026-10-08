@@ -201,7 +201,36 @@ def _v6():
     ]
 
 
-STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4()), (5, _v5()), (6, _v6())]
+_RUN_FIXED = ("newsletter_id", "newsletter_name", "fund_name", "issue_label", "channel", "sent_on", "user",
+              "row_count", "copy_count", "skipped_count", "source_run_id", "created_at")
+_ROW_FIXED = ("run_id", "person_id", "church_id", "recipient_name", "church_name", "address1", "address2", "city",
+              "state", "zip", "quantity", "delivery", "email", "fund_name", "first_name", "middle_name",
+              "last_name", "recipient_type")
+
+
+def _no_edit_trigger(table, fixed, label):
+    changed = " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in ("id",) + fixed)
+    return (f"CREATE TRIGGER {table}_keep_history BEFORE UPDATE ON {table} WHEN {changed} "
+            f"BEGIN SELECT RAISE(ABORT, 'A saved {label} cannot be changed.'); END")
+
+
+def _v7():
+    used = ("EXISTS (SELECT 1 FROM mailing_runs WHERE newsletter_id = OLD.id) "
+            "OR EXISTS (SELECT 1 FROM subscriptions_v2 WHERE newsletter_id = OLD.id) "
+            "OR EXISTS (SELECT 1 FROM subscriptions WHERE newsletter_id = OLD.id)")
+    return [
+        f"CREATE TRIGGER newsletters_keep_when_used BEFORE DELETE ON newsletters WHEN {used} "
+        "BEGIN SELECT RAISE(ABORT, 'This newsletter has history, so it cannot be deleted. Archive it instead.'); END",
+        _no_edit_trigger("mailing_runs", _RUN_FIXED, "mailing"),
+        _no_edit_trigger("mailing_run_rows", _ROW_FIXED, "mailing row"),
+        "CREATE TRIGGER mailing_runs_no_delete BEFORE DELETE ON mailing_runs "
+        "BEGIN SELECT RAISE(ABORT, 'A saved mailing cannot be deleted.'); END",
+        "CREATE TRIGGER mailing_run_rows_no_delete BEFORE DELETE ON mailing_run_rows "
+        "BEGIN SELECT RAISE(ABORT, 'A saved mailing cannot be deleted.'); END",
+    ]
+
+
+STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4()), (5, _v5()), (6, _v6()), (7, _v7())]
 SCHEMA_VERSION = STEPS[-1][0]
 
 
