@@ -60,3 +60,14 @@ def test_unreadable_backup_is_listed_without_counts(session, db_path):
     assert entry["counts"] is None
     with pytest.raises(backup.BackupError):
         backup.restore_backup(db_path, bad)
+
+
+def test_rotation_never_removes_before_update_or_before_restore_backups(session, db_path):
+    folder = backup.beside_dir(db_path)
+    backup.make_backup(db_path, folder, "before-update")
+    backup.make_backup(db_path, folder, "before-restore")
+    for _ in range(backup.KEEP + 5):
+        backup.make_backup(db_path, folder, "manual")
+    reasons = [b["reason"] for b in backup.list_backups(db_path) if b["where"] == "Next to the data file"]
+    assert reasons.count("before-update") == 1 and reasons.count("before-restore") == 1
+    assert reasons.count("manual") + reasons.count("daily") == backup.KEEP

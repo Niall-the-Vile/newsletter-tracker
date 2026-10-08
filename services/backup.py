@@ -11,6 +11,7 @@ from data.connection import connect
 from data.migrations import LEGACY_TABLES, check_not_newer
 
 KEEP = 30
+NEVER_ROTATED = ("before-update", "before-restore")
 
 
 class BackupError(Exception):
@@ -77,7 +78,8 @@ def make_backup(db_path, dest_dir, reason):
 
 
 def _rotate(dest_dir, prefix):
-    files = sorted(f for f in os.listdir(dest_dir) if f.startswith(prefix) and f.endswith(".db"))
+    files = sorted(f for f in os.listdir(dest_dir) if f.startswith(prefix) and f.endswith(".db")
+                   and not f.endswith(tuple(f"-{r}.db" for r in NEVER_ROTATED)))
     for old in files[:-KEEP]:
         try:
             os.remove(os.path.join(dest_dir, old))
