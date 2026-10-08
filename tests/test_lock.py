@@ -137,3 +137,32 @@ def test_old_file_held_by_someone_else_shows_a_plain_message_and_builds_no_ui(le
         assert os.path.exists(path + ".lock")  # the other person's lock is untouched
     finally:
         holder.release()
+
+
+def test_unreadable_lock_file_counts_as_held_then_stale(db_path):
+    path = db_path + ".lock"
+    with open(path, "w") as f:
+        f.write('{"user": "Pat", "heart')  # half written
+    lock = WriterLock(db_path)
+    assert lock.acquire() == "held"
+    old = time.time() - 600
+    os.utime(path, (old, old))
+    assert WriterLock(db_path).acquire() == "stale"
+
+
+def test_take_over_gives_up_if_someone_else_wrote_the_lock_after_us(db_path, monkeypatch):
+    first = startup.open_session(db_path)
+    age_lock(db_path, 600)
+    lock = WriterLock(db_path)
+    assert lock.acquire() == "stale"
+    other = WriterLock(db_path)
+    real = lock._write
+
+    def write_then_lose(info):
+        real(info)
+        other._write(other._info())
+
+    monkeypatch.setattr(lock, "_write", write_then_lose)
+    assert lock.take_over() is False and lock.status == "held"
+    assert json.load(open(db_path + ".lock"))["token"] == other.token
+    first.close()

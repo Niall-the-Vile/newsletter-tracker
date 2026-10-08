@@ -132,7 +132,10 @@ def list_backups(db_path):
 
 def restore_backup(db_path, backup_path):
     """Safety backup first, then copy the chosen backup over the data file. Nobody else may be editing."""
-    src = open_readonly(backup_path)
+    try:
+        src = open_readonly(backup_path)
+    except sqlite3.Error as e:
+        raise BackupError(f"Could not open that backup: {e}") from e
     try:
         if src.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
             raise BackupError("That backup is damaged, so it was not restored.")

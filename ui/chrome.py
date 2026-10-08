@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from data import migrations
 from services import backup, diagnostics, errors
 
 HEARTBEAT_MS = 30_000
@@ -150,10 +151,13 @@ class RestoreDialog(tk.Toplevel):
                 f"({_counts_text(entry['counts'])})\n\nChanges made since then will be undone. "
                 "Everyone else must have closed the program.", parent=self):
             return
-        self.session.conn.close()
         try:
             backup.restore_backup(self.session.db_path, entry["path"])
-        finally:
-            self.session.lock.release()
+        except (backup.BackupError, migrations.NewerVersionError, OSError) as e:
+            messagebox.showerror("Could not restore",
+                                 f"The data file was not replaced and the program is still open.\n\n{e}", parent=self)
+            return
+        self.session.conn.close()
+        self.session.lock.release()
         messagebox.showinfo("Restored", "Done. The program will close now. Open it again to carry on.", parent=self)
         self.master.destroy()

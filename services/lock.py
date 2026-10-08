@@ -9,6 +9,7 @@ from datetime import datetime
 
 HEARTBEAT_SECONDS = 30
 STALE_SECONDS = 120
+RECHECK_SECONDS = 0.2
 
 
 def lock_path(db_path):
@@ -22,7 +23,12 @@ def _read(path):
     except FileNotFoundError:
         return None
     except (OSError, ValueError):
-        return {"user": "Someone", "machine": "", "token": None, "started": 0, "heartbeat": 0}
+        # Unreadable or half-written: counts as held until it has been quiet for the stale time.
+        try:
+            seen = os.path.getmtime(path)
+        except OSError:
+            seen = time.time()
+        return {"user": "Someone", "machine": "", "token": None, "started": seen, "heartbeat": seen}
 
 
 class WriterLock:
@@ -83,6 +89,12 @@ class WriterLock:
             return self.status == "owner"
         self.holder = self._info()
         self._write(self.holder)
+        time.sleep(RECHECK_SECONDS)  # let a simultaneous take-over finish writing, then see who won
+        current = _read(self.path)
+        if current is None or current.get("token") != self.token:
+            self.holder = current
+            self.status = "held"
+            return False
         self.status = "owner"
         return True
 
