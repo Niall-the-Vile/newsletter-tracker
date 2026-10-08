@@ -10,6 +10,10 @@ EXPORT_HEADERS = [
     "City", "State", "Zip", "Church Name", "Type", "Quantity", "Fund", "Issue label", "Delivery",
 ]
 
+EMAIL_HEADERS = ["First Name", "Middle Name", "Last Name", "Email", "Church Name", "Type", "Fund", "Issue label",
+                 "Delivery"]
+SKIPPED_HEADERS = ["Name", "Type", "Reason"]
+
 PLAIN_DELIVERY = {"Print": "Mail", "Email": "Email", "Both": "Both"}
 
 
@@ -22,6 +26,12 @@ def csv_safe(value):
 
 
 def csv_line(run, r):
+    if run["channel"] == "Email":
+        return [
+            csv_safe(r["first_name"]), csv_safe(r["middle_name"]), csv_safe(r["last_name"]), csv_safe(r["email"]),
+            csv_safe(r["church_name"]), csv_safe(r["recipient_type"]), csv_safe(r["fund_name"]),
+            csv_safe(run["issue_label"]), PLAIN_DELIVERY.get(r["delivery"], r["delivery"] or ""),
+        ]
     return [
         csv_safe(r["first_name"]), csv_safe(r["middle_name"]), csv_safe(r["last_name"]),
         csv_safe(r["address1"]), csv_safe(r["address2"]), csv_safe(r["city"]), csv_safe(r["state"]),
@@ -36,7 +46,7 @@ def write_run_csv(out_path, run, rows):
     try:
         with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(EXPORT_HEADERS)
+            writer.writerow(EMAIL_HEADERS if run["channel"] == "Email" else EXPORT_HEADERS)
             for r in rows:
                 writer.writerow(csv_line(run, r))
         os.replace(tmp, out_path)
@@ -45,3 +55,12 @@ def write_run_csv(out_path, run, rows):
             os.remove(tmp)
         raise
     return len(rows)
+
+
+def write_skipped_csv(out_path, skipped):
+    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(SKIPPED_HEADERS)
+        for s in skipped:
+            writer.writerow([csv_safe(s["name"]), s["kind"].title(), csv_safe(s["reason"])])
+    return len(skipped)

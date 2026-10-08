@@ -45,6 +45,8 @@ folder, but they should all be pointed at the **same** `.db` file for the data t
   with the problems to fix and who was left out (and why), then saves the CSV sheet. The mailing is
   only recorded once the file has saved. Open a past mailing to see its addresses, save the exact
   same file again, or get a packing sheet by state and church.
+- **Delivery and email lists** - each newsletter a person or church gets is sent by Mail, Email or Both (shown with a colour; Both rows are marked BOTH in the list). In Create mailing, choose Email list to save a list of addresses; people who get it by Both are in the mailing sheet and the email list. Nothing is sent from this program.
+- **Setup > Bounces** - mark an email address as bounced, or paste in a list of bounced addresses. A bounced address is left out of email lists (a soft bounce only after 3 in a row) until the address is corrected.
 - **Setup > Newsletters** — add and rename newsletters, limit one to a fund, archive or delete.
   Each person's or church's copies and delivery are changed in the People & Churches detail pane.
 - **Import tab** â€” bring in an existing CSV or Excel mailing list. It auto-detects the columns

@@ -9,7 +9,7 @@ Tables:
   subscriptions - join table: which people receive which newsletter, and how many copies
 """
 from data import activity
-from data.connection import connect, now, transaction  # noqa: F401  (re-exported for callers)
+from data.connection import ConflictError, connect, now, transaction  # noqa: F401  (re-exported for callers)
 
 DEFAULT_NEWSLETTERS = [
     ("MAAP Newsletter", "Sent to church reps in bulk; reps distribute copies into church mailboxes."),
@@ -31,7 +31,9 @@ def get_person(conn, person_id):
     return conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
 
 
-def upsert_person(conn, data, person_id=None):
+def upsert_person(conn, data, person_id=None, expected_updated_at=None):
+    """Adds or edits a person. expected_updated_at is the time the screen last showed; if the row changed
+    since, nothing is saved."""
     ts = now()
     with transaction(conn):
         if person_id:
@@ -45,7 +47,12 @@ def upsert_person(conn, data, person_id=None):
                 (existing[k] or "") != (merged[k] or "") for k in ADDRESS_FIELDS)
             set_clause = ", ".join(f"{col} = :{col}" for col in merged)
             merged["id"] = person_id
-            conn.execute(f"UPDATE people SET {set_clause} WHERE id = :id", merged)
+            merged["expected"] = expected_updated_at
+            cur = conn.execute(f"UPDATE people SET {set_clause} WHERE id = :id "
+                               "AND (:expected IS NULL OR updated_at IS :expected)", merged)
+            if cur.rowcount == 0 and expected_updated_at is not None:
+                raise ConflictError("Someone else changed this person after you opened them. "
+                                    "Close this window and look again.")
             if address_changed:  # a new address clears the returned-mail flag
                 conn.execute("UPDATE people SET returned_mail = 0 WHERE id = ?", (person_id,))
                 conn.execute("UPDATE churches SET returned_mail = 0 WHERE id IN (SELECT church_id FROM church_reps "
@@ -187,7 +194,8 @@ def add_subscription(conn, person_id, newsletter_id, quantity=1):
         conn.execute(
             "INSERT INTO subscriptions (person_id, newsletter_id, quantity, active) "
             "VALUES (?, ?, ?, 1) "
-            "ON CONFLICT(person_id, newsletter_id) DO UPDATE SET quantity=excluded.quantity, active=1",
+            "ON CONFLICT(person_id, newsletter_id) DO UPDATE SET active=1, "
+            "quantity=CASE WHEN active=1 THEN quantity ELSE excluded.quantity END",  # keep copies already set
             (person_id, newsletter_id, quantity),
         )
         activity.log(conn, "subscription.add", f"Added to newsletter {newsletter_id}, {quantity} copies",

@@ -8,10 +8,12 @@ REMOVE_TYPED_OVER = 10
 NO_FUND = 0  # fund filter value: people without a fund (real fund ids start at 1)
 
 _COPIES = "n.name || CASE WHEN s.quantity > 1 THEN ' (' || s.quantity || ' copies)' ELSE '' END"
+# The new list also says how each one is sent, unless it is by mail.
+_COPIES_V2 = (_COPIES + " || CASE s.delivery WHEN 'Email' THEN ' - Email' WHEN 'Both' THEN ' - Both' ELSE '' END")
 
 # New subscriptions if the person has any, else the old list that still drives the current mailing.
 _GETS_SQL = f"""COALESCE(
-    (SELECT group_concat({_COPIES}, ', ')
+    (SELECT group_concat({_COPIES_V2}, ', ')
        FROM subscriptions_v2 s JOIN newsletters n ON n.id = s.newsletter_id
       WHERE s.person_id = p.id AND s.active = 1),
     CASE WHEN EXISTS (SELECT 1 FROM subscriptions_v2 s WHERE s.person_id = p.id)

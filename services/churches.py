@@ -181,6 +181,8 @@ def list_churches(conn, search="", state="All", fund=None, needs_a_default=False
     """fund: None for all, 0 for churches without a fund, or a fund id."""
     sql = (
         "SELECT c.id, c.name, c.conference, c.city, c.state, c.fund_id, f.name AS fund_name, "
+        "EXISTS (SELECT 1 FROM subscriptions_v2 s WHERE s.church_id = c.id AND s.active = 1 "
+        "        AND s.delivery = 'Both') AS is_both, "
         f"{_DEFAULT_NAME} AS default_name, "
         "(SELECT COUNT(*) FROM church_reps r WHERE r.church_id = c.id AND r.active = 1) AS rep_count, "
         "(SELECT COUNT(*) FROM people p WHERE p.church_id = c.id AND COALESCE(p.active, 1) = 1) AS member_count "

@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 import db
+from data.connection import ConflictError, ReadOnlyError
 
 RECIPIENT_TYPES = ["Member", "Rep", "Church", "Other"]
 
@@ -66,6 +67,10 @@ class PersonDialog(tk.Toplevel):
         person_id = self.person["id"] if self.person else None
         if person_id is None:
             data["active"] = 1
-        db.upsert_person(self.conn, data, person_id)
+        try:
+            db.upsert_person(self.conn, data, person_id, self.person["updated_at"] if self.person else None)
+        except (ConflictError, ReadOnlyError) as e:
+            messagebox.showwarning("Not saved", str(e), parent=self)
+            return
         self.result = True
         self.destroy()

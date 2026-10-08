@@ -8,6 +8,7 @@ from data.connection import ConflictError, ReadOnlyError
 from services import backup, mailings
 
 CSV_TYPES = [("CSV files", "*.csv")]
+MAIL_SHEET, EMAIL_LIST = "Mailing sheet (by post)", "Email list"
 
 
 class SkippedDialog(tk.Toplevel):
@@ -39,6 +40,7 @@ class CreateMailingDialog(tk.Toplevel):
         self.options = {n["name"]: n["id"] for n in db.list_newsletters(conn)}
         self.news_var = tk.StringVar(value=next(iter(self.options), ""))
         self.label_var = tk.StringVar()
+        self.channel_var = tk.StringVar(value=MAIL_SHEET)
         self.steps = [self._step1(), self._step2(), self._step3()]
         self.current = None
         self.show_step(0)
@@ -57,6 +59,11 @@ class CreateMailingDialog(tk.Toplevel):
                      width=36).pack(anchor="w", pady=(0, 8))
         ttk.Label(f, text="Issue label (for example Fall 2026):").pack(anchor="w")
         ttk.Entry(f, textvariable=self.label_var, width=40).pack(anchor="w", pady=(0, 8))
+        ttk.Label(f, text="Make:").pack(anchor="w")
+        ttk.Combobox(f, textvariable=self.channel_var, values=[MAIL_SHEET, EMAIL_LIST], state="readonly",
+                     width=36).pack(anchor="w", pady=(0, 8))
+        ttk.Label(f, text="The email list is only a list of addresses. Nothing is sent from this program.",
+                  foreground="#666666").pack(anchor="w")
         row = ttk.Frame(f)
         row.pack(anchor="w", pady=8)
         self.next1 = ttk.Button(row, text="Next", command=self.to_summary)
@@ -100,19 +107,22 @@ class CreateMailingDialog(tk.Toplevel):
     def newsletter_id(self):
         return self.options.get(self.news_var.get())
 
+    def channel(self):
+        return "Email" if self.channel_var.get() == EMAIL_LIST else "Print"
+
     def to_summary(self):
         nid, label = self.newsletter_id(), self.label_var.get().strip()
         if nid is None or not label:
             messagebox.showinfo("Create mailing", "Choose a newsletter and enter an issue label.", parent=self)
             return
-        dup = mailings.same_label_runs(self.conn, nid, label)
+        dup = mailings.same_label_runs(self.conn, nid, label, self.channel())
         if dup and not self.allow_duplicate:
             when = ", ".join(d["sent_on"] for d in dup)
             if not messagebox.askyesno("Already made", f"'{label}' was already made on {when}. Make another?",
                                        parent=self):
                 return
             self.allow_duplicate = True
-        self.check = mailings.preflight(self.conn, nid)
+        self.check = mailings.preflight(self.conn, nid, self.channel())
         self.summary.config(text=mailings.summary_text(self.check))
         self.problems.config(state="normal")
         self.problems.delete("1.0", "end")
@@ -137,14 +147,14 @@ class CreateMailingDialog(tk.Toplevel):
         SkippedDialog(self, self.check["skipped"])
 
     def choose_and_save(self):
-        name = f"{self.news_var.get()} {self.label_var.get().strip()}.csv"
+        name = f"{self.news_var.get()} {self.label_var.get().strip()}{' email list' if self.channel() == 'Email' else ''}.csv"
         path = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", initialfile=name, filetypes=CSV_TYPES)
         if path:
             self.save_to(path)
 
     def save_to(self, path):
         try:
-            mailings.create_mailing(self.conn, self.newsletter_id(), self.label_var.get(), path, True)
+            mailings.create_mailing(self.conn, self.newsletter_id(), self.label_var.get(), path, True, self.channel())
         except mailings.PreflightBlocked as e:
             messagebox.showwarning("Not saved", str(e), parent=self)
         except (mailings.MailingError, ReadOnlyError, ConflictError, backup.BackupError) as e:
@@ -153,7 +163,17 @@ class CreateMailingDialog(tk.Toplevel):
             messagebox.showerror("Not saved", f"The file could not be saved, so no mailing was recorded.\n\n({e})",
                                  parent=self)
         else:
-            messagebox.showinfo("Saved", f"Saved the sheet and recorded the mailing:\n{path}", parent=self)
+            text = f"Saved the sheet and recorded the mailing:\n{path}"
+            if self.channel() == "Email":
+                text = f"Saved the email list and recorded it:\n{path}"
+                if self.check["skipped"]:
+                    left_out = path[:-4] + " left out.csv" if path.lower().endswith(".csv") else path + " left out.csv"
+                    try:
+                        mailings.write_skipped_csv(left_out, self.check["skipped"])
+                        text += f"\n\nWho was left out, and why:\n{left_out}"
+                    except OSError:
+                        text += "\n\nThe list of people left out could not be saved."
+            messagebox.showinfo("Saved", text, parent=self)
             self.on_done()
             self.destroy()
 
@@ -168,8 +188,11 @@ class RunDialog(tk.Toplevel):
         run = mailings.get_run(conn, run_id)
         self.title(f"{run['newsletter_name']} - {run['issue_label']}")
         self.geometry("860x520")
-        ttk.Label(self, text=f"Sent {run['sent_on']} by {run['user'] or ''}: {run['row_count']} addresses, "
-                  f"{run['copy_count']} copies, {run['skipped_count']} left out.", padding=8).pack(anchor="w")
+        email = run["channel"] == "Email"
+        ttk.Label(self, text=f"{'Email list' if email else 'Sent'} {run['sent_on']} by {run['user'] or ''}: "
+                  + (f"{run['row_count']} email addresses" if email
+                     else f"{run['row_count']} addresses, {run['copy_count']} copies")
+                  + f", {run['skipped_count']} left out.", padding=8).pack(anchor="w")
         tabs = ttk.Notebook(self)
         tabs.pack(fill="both", expand=True, padx=8)
         rows = ttk.Frame(tabs)
@@ -184,19 +207,21 @@ class RunDialog(tk.Toplevel):
         self.tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
         for r in mailings.run_rows(conn, run_id):
-            place = ", ".join(filter(None, [r["address1"], r["city"], r["state"], r["zip"]]))
-            self.tree.insert("", "end", values=(r["recipient_name"] or "", r["church_name"] or "", place, r["quantity"],
+            place = r["email"] or "" if email else ", ".join(filter(None, [r["address1"], r["city"], r["state"], r["zip"]]))
+            self.tree.insert("", "end", values=(r["recipient_name"] or "", r["church_name"] or "", place,
+                                                "" if email else r["quantity"],
                                                 exporter.PLAIN_DELIVERY.get(r["delivery"], r["delivery"] or "")))
-        self.sheet_text = tk.Text(tabs, wrap="none", state="normal")
-        self.sheet = mailings.packing_sheet(conn, run_id)
-        self.sheet_text.insert("end", self._sheet_text())
-        self.sheet_text.config(state="disabled")
-        tabs.add(rows, text="Addresses")
-        tabs.add(self.sheet_text, text="Packing sheet")
+        tabs.add(rows, text="Email addresses" if email else "Addresses")
         row = ttk.Frame(self, padding=8)
         row.pack(fill="x")
         ttk.Button(row, text="Save the file again...", command=self.save_again).pack(side="left", padx=(0, 4))
-        ttk.Button(row, text="Save packing sheet...", command=self.save_sheet).pack(side="left", padx=4)
+        if not email:
+            self.sheet_text = tk.Text(tabs, wrap="none", state="normal")
+            self.sheet = mailings.packing_sheet(conn, run_id)
+            self.sheet_text.insert("end", self._sheet_text())
+            self.sheet_text.config(state="disabled")
+            tabs.add(self.sheet_text, text="Packing sheet")
+            ttk.Button(row, text="Save packing sheet...", command=self.save_sheet).pack(side="left", padx=4)
         ttk.Button(row, text="Close", command=self.destroy).pack(side="right")
         self.transient(master)
 
@@ -246,10 +271,10 @@ class MailingsTab(ttk.Frame):
         self.note.pack(side="right")
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True)
-        cols = ("sent", "news", "issue", "rows", "copies", "left_out", "by")
+        cols = ("sent", "news", "issue", "how", "rows", "copies", "left_out", "by")
         self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
-        for col, head, w in zip(cols, ("Sent", "Newsletter", "Issue", "Addresses", "Copies", "Left out", "By"),
-                                (90, 160, 140, 80, 70, 70, 100)):
+        for col, head, w in zip(cols, ("Sent", "Newsletter", "Issue", "Sent by", "Addresses", "Copies", "Left out", "By"),
+                                (90, 160, 140, 60, 80, 70, 70, 100)):
             self.tree.heading(col, text=head)
             self.tree.column(col, width=w, anchor="w")
         vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -263,8 +288,9 @@ class MailingsTab(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         for r in mailings.list_runs(self.conn):
             self.tree.insert("", "end", iid=str(r["id"]), values=(
-                r["sent_on"], r["newsletter_name"], r["issue_label"], r["row_count"], r["copy_count"],
-                r["skipped_count"], r["user"] or ""))
+                r["sent_on"], r["newsletter_name"], r["issue_label"], "Email" if r["channel"] == "Email" else "Mail",
+                r["row_count"], "" if r["channel"] == "Email" else r["copy_count"], r["skipped_count"],
+                r["user"] or ""))
         starts = mailings.history_starts(self.conn)
         self.note.config(text=f"History starts {starts}." if starts
                          else "History starts with the first mailing made in this program.")

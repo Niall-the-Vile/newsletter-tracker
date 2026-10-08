@@ -27,8 +27,8 @@ def test_window_has_three_tabs_and_setup_panels(root, session):
     app = App(root, session)
     root.update()
     assert [app.notebook.tab(i, "text") for i in range(3)] == ["People & Churches", "Mailings", "Setup"]
-    assert [app.setup_tab.tab(i, "text") for i in range(6)] == [
-        "Newsletters", "Funds", "Old subscriptions", "Church grouping", "Import", "Activity"]
+    assert [app.setup_tab.tab(i, "text") for i in range(7)] == [
+        "Newsletters", "Funds", "Old subscriptions", "Church grouping", "Import", "Bounces", "Activity"]
     app.destroy()
 
 

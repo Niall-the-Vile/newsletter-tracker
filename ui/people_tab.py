@@ -4,14 +4,15 @@ from tkinter import messagebox, simpledialog, ttk
 
 import db
 from data.connection import ConflictError, ReadOnlyError
-from services import churches, funds, people
+from services import bounces, churches, funds, people
 from ui.church_detail import ChurchDetail
 from ui.person_dialog import PersonDialog
-from ui.subscriptions_box import SubscriptionsBox
+from ui.subscriptions_box import CHIP_COLOURS, SubscriptionsBox
 
 SEARCH_DELAY_MS = 250
 ALL_FUNDS, NO_FUND_LABEL = "All funds", "No fund"
 CHURCH = "Church"
+BOTH_MARK = "BOTH"  # mail and email; the whole row is shaded as well
 
 
 class SetFundDialog(tk.Toplevel):
@@ -92,11 +93,12 @@ class PeopleTab(ttk.Frame):
         paned.add(left, weight=4)
         columns = ("name", "type", "fund", "contact", "place", "gets", "both")
         heads = ("Name", "Type", "Fund", "Mailing contact", "City/State", "Gets", "Both")
-        widths = (150, 60, 70, 100, 110, 160, 45)
+        widths = (150, 60, 70, 100, 110, 200, 50)
         self.tree = ttk.Treeview(left, columns=columns, show="headings", selectmode="extended")
         for col, head, w in zip(columns, heads, widths):
             self.tree.heading(col, text=head)
             self.tree.column(col, width=w, anchor="w")
+        self.tree.tag_configure("both", background=CHIP_COLOURS["Both"])
         vsb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -127,6 +129,8 @@ class PeopleTab(ttk.Frame):
         self.d_info.pack(anchor="w", pady=(2, 8))
         self.returned_btn = ttk.Button(self.person_box, text="Mark mail returned", command=self.toggle_returned)
         self.returned_btn.pack(anchor="w", pady=(0, 6))
+        self.bounce_btn = ttk.Button(self.person_box, text="Mark email bounced", command=self.toggle_bounce)
+        self.bounce_btn.pack(anchor="w", pady=(0, 6))
         tabs = ttk.Notebook(self.person_box)
         tabs.pack(fill="both", expand=True)
         self.subs_box = SubscriptionsBox(tabs, self.conn, self.refresh_list_only)
@@ -179,7 +183,8 @@ class PeopleTab(ttk.Frame):
             place = ", ".join(filter(None, [r["city"], r["state"]]))
             self.tree.insert("", "end", iid=str(r["id"]), values=(
                 people.display_name(r["first_name"], r["last_name"]), r["recipient_type"] or "",
-                r["fund_name"] or "", "Themselves", place, r["gets"], "Both" if r["is_both"] else ""))
+                r["fund_name"] or "", "Themselves", place, r["gets"], BOTH_MARK if r["is_both"] else ""),
+                             tags=("both",) if r["is_both"] else ())
         self.count_label.config(text=f"{len(rows)} {'removed ' if removed else ''}people shown")
         self.person_buttons(True)
         self.remove_btn.state(["disabled"] if removed else ["!disabled"])
@@ -201,7 +206,8 @@ class PeopleTab(ttk.Frame):
             place = ", ".join(filter(None, [r["city"], r["state"]]))
             self.tree.insert("", "end", iid=str(r["id"]), values=(
                 r["name"], CHURCH, r["fund_name"] or "", churches.contact_label(r["default_name"], r["rep_count"]),
-                place, f"{r['rep_count']} reps, {r['member_count']} members", ""))
+                place, f"{r['rep_count']} reps, {r['member_count']} members", BOTH_MARK if r["is_both"] else ""),
+                             tags=("both",) if r["is_both"] else ())
         self.count_label.config(text=f"{len(rows)} churches shown")
         self.person_buttons(False)
         self.show_detail()
@@ -232,6 +238,7 @@ class PeopleTab(ttk.Frame):
         self.d_history.delete(0, "end")
         self.d_note.config(text="")
         self.returned_btn.state(["disabled"])
+        self.bounce_btn.state(["disabled"])
         if len(ids) != 1:
             self.d_name.config(text="")
             self.d_info.config(text=f"{len(ids)} people selected." if ids else "Select a person to see their details.")
@@ -248,9 +255,14 @@ class PeopleTab(ttk.Frame):
         lines.append("  ".join(filter(None, [p["email"], p["cell_phone"] or p["home_phone"]])))
         if p["returned_mail"]:
             lines.append("Mail was returned from this address.")
+        skipped = bounces.is_valid_email(p["email"]) and bounces.is_skipped(self.conn, p["email"])
+        if skipped:
+            lines.append("This email address bounced, so email is skipped until the address is corrected.")
         self.d_info.config(text="\n".join(l for l in lines if l))
         self.returned_btn.config(text="Clear returned-mail flag" if p["returned_mail"] else "Mark mail returned")
         self.returned_btn.state(["!disabled"])
+        self.bounce_btn.config(text="Clear email bounce" if skipped else "Mark email bounced")
+        self.bounce_btn.state(["!disabled"] if bounces.is_valid_email(p["email"]) else ["disabled"])
         self.subs_box.show("person", ids[0], d["gets"])
         for h in d["history"]:
             self.d_history.insert("end", f"{h['ts'][:10]}  {h['summary']}")
@@ -320,6 +332,20 @@ class PeopleTab(ttk.Frame):
             people.set_returned_mail(self.conn, "person", ids[0], not flagged)
         except (ReadOnlyError, ConflictError) as e:
             messagebox.showwarning("Returned mail", str(e))
+        self.refresh_list_only()
+
+    def toggle_bounce(self):
+        ids = self.selected_ids()
+        if len(ids) != 1:
+            return
+        email = db.get_person(self.conn, ids[0])["email"]
+        try:
+            if bounces.is_skipped(self.conn, email):
+                bounces.clear(self.conn, email)
+            else:
+                bounces.mark_bounced(self.conn, email, "Manual")
+        except (bounces.BounceError, ReadOnlyError, ConflictError) as e:
+            messagebox.showwarning("Email bounce", str(e))
         self.refresh_list_only()
 
     def restore(self):

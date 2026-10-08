@@ -13,7 +13,7 @@ import exporter
 from data import activity
 from data.connection import now, require_writable, transaction
 from importer import normalize_zip
-from services import backup
+from services import backup, bounces
 
 NO_FUND = "No fund"
 WRONG_FUND = "Fund doesn't match"
@@ -21,6 +21,9 @@ REMOVED = "Removed from the list"
 NO_CONTACT = "No contact"
 NEEDS_DEFAULT = "No main contact chosen"
 EMAIL_ONLY = "Gets it by email only"
+MAIL_ONLY = "Gets it by mail only"
+BOUNCED = "Email address bounced"
+NO_EMAIL = "No valid email address"
 VIA_CHURCH = "Already gets it for their church"
 
 _PLAIN_DELIVERY = exporter.PLAIN_DELIVERY
@@ -63,9 +66,12 @@ def _label(row):
     return row["church_name"] if row["church_id"] else row["recipient_name"]
 
 
-def _problems(row):
+def _problems(row, channel="Print"):
     out = []
-    if not (row["address1"] and row["city"] and row["zip"]):
+    if channel == "Email":
+        if not bounces.is_valid_email(row["email"]):
+            out.append(NO_EMAIL)
+    elif not (row["address1"] and row["city"] and row["zip"]):
         out.append("No address")
     if row["quantity"] < 1:
         out.append("Copies under 1")
@@ -103,14 +109,25 @@ def _newsletter(conn, newsletter_id):
     return nl
 
 
-def build_mailing(conn, newsletter_id):
-    """Everyone who gets this newsletter in a mailed run right now, plus who was left out and why.
+def build_mailing(conn, newsletter_id, channel="Print"):
+    """Everyone who gets this newsletter in a mailed (Print) or emailed (Email) run right now, and who was left out.
 
-    Each row holds the saved columns plus 'problems' (red) and 'returned' (a yellow warning).
+    Delivery Both is in both runs. Each row holds the saved columns plus 'problems' (red) and 'returned' (a
+    yellow warning).
     """
     nl = _newsletter(conn, newsletter_id)
     wanted = nl["fund_id"]
     rows, skipped = [], []
+    in_run = ("Print", "Both") if channel == "Print" else ("Email", "Both")
+    other_only = EMAIL_ONLY if channel == "Print" else MAIL_ONLY
+    bounced = bounces.skipped_keys(conn) if channel == "Email" else set()
+
+    def by_delivery_or_bounce(delivery, email):
+        if delivery not in in_run:
+            return other_only
+        if bounces.is_valid_email(email) and bounces.normalize_email(email) in bounced:
+            return BOUNCED
+        return None
 
     def fund_reason(entity_fund):
         if wanted is None:
@@ -130,8 +147,8 @@ def build_mailing(conn, newsletter_id):
                 reason = NO_CONTACT
             elif c["rep_id"] is None or not (c["p_active"] is None or c["p_active"]):
                 reason = NEEDS_DEFAULT
-            elif c["delivery"] == "Email":
-                reason = EMAIL_ONLY
+            else:
+                reason = by_delivery_or_bounce(c["delivery"], c["email"])
         if reason:
             skip("church", c["church_id"], c["church_name"], reason, c["quantity"])
             continue
@@ -150,9 +167,8 @@ def build_mailing(conn, newsletter_id):
         name = _name(p["first_name"], p["last_name"])
         reason = REMOVED if not p["p_active"] else fund_reason(p["fund_id"])
         if reason is None:
-            if p["delivery"] == "Email":
-                reason = EMAIL_ONLY
-            elif p["person_id"] in emitted_reps:
+            reason = by_delivery_or_bounce(p["delivery"], p["email"])
+            if reason is None and p["person_id"] in emitted_reps:
                 reason = VIA_CHURCH
         if reason:
             skip("person", p["person_id"], name, reason, p["quantity"])
@@ -170,16 +186,16 @@ def build_mailing(conn, newsletter_id):
     rows.sort(key=lambda r: ((r["last_name"] or "").lower(), (r["first_name"] or "").lower(),
                              (r["church_name"] or "").lower(), r["church_id"] or 0, r["person_id"] or 0))
     for r in rows:
-        r["problems"] = _problems(r)
+        r["problems"] = _problems(r, channel)
     skipped.sort(key=lambda s: (s["reason"], s["name"].lower(), s["id"]))
     return {"newsletter": nl, "rows": rows, "skipped": skipped}
 
 
 # ---------- checks before saving ----------
 
-def previous_run(conn, newsletter_id):
-    return conn.execute("SELECT * FROM mailing_runs WHERE newsletter_id = ? AND channel = 'Print' "
-                        "ORDER BY id DESC LIMIT 1", (newsletter_id,)).fetchone()
+def previous_run(conn, newsletter_id, channel="Print"):
+    return conn.execute("SELECT * FROM mailing_runs WHERE newsletter_id = ? AND channel = ? "
+                        "ORDER BY id DESC LIMIT 1", (newsletter_id, channel)).fetchone()
 
 
 def _address_text(r):
@@ -188,11 +204,19 @@ def _address_text(r):
     return " ".join(" ".join((p or "").split()).lower() for p in parts)
 
 
-def preflight(conn, newsletter_id):
-    """Red items block the mailing. Yellow ones warn. Also the counts and the change since the last issue."""
-    mailing = build_mailing(conn, newsletter_id)
+def preflight(conn, newsletter_id, channel="Print"):
+    """Red items block the mailing. Yellow ones warn. Also the counts and the change since the last issue.
+
+    A mailed run warns about anyone who gets email but has no valid address. An email run blocks on it.
+    """
+    mailing = build_mailing(conn, newsletter_id, channel)
     rows, red, yellow = mailing["rows"], [], []
-    prev = previous_run(conn, newsletter_id)
+    mail = channel == "Print"
+    if mail:
+        for r in build_mailing(conn, newsletter_id, "Email")["rows"]:
+            if r["problems"]:
+                yellow.append({"who": _label(r), "text": "Gets email but has no valid email address"})
+    prev = previous_run(conn, newsletter_id, channel)
     before = {}
     if prev:
         for r in conn.execute("SELECT * FROM mailing_run_rows WHERE run_id = ?", (prev["id"],)):
@@ -202,13 +226,17 @@ def preflight(conn, newsletter_id):
         who = _label(r)
         for text in r["problems"]:
             red.append({"who": who, "text": text})
-        old = before.get(_key(r))
+        old = before.get(_key(r)) if mail else None
         if old is not None:
             if _address_text(old) != _address_text(r):
                 yellow.append({"who": who, "text": "Address changed since the last issue"})
             if old["quantity"] != r["quantity"]:
                 yellow.append({"who": who, "text": f"Copies changed since the last issue "
                                                    f"({old['quantity']} to {r['quantity']})"})
+        if not mail:
+            if r["email"]:
+                seen.setdefault(bounces.normalize_email(r["email"]), []).append(who)
+            continue
         if r["zip"] and not re.fullmatch(r"\d{5}(-\d{4})?", r["zip"]):
             yellow.append({"who": who, "text": f"ZIP code looks wrong ({r['zip']})"})
         if r["returned"]:
@@ -217,7 +245,8 @@ def preflight(conn, newsletter_id):
             seen.setdefault(" ".join(r["address1"].lower().split()) + "|" + (r["zip"] or "")[:5], []).append(who)
     for names in seen.values():
         if len(names) > 1:
-            yellow.extend({"who": who, "text": "Same address as another row"} for who in names)
+            yellow.extend({"who": who, "text": "Same address as another row" if mail else
+                           "Same email address as another row"} for who in names)
 
     by_delivery, by_fund, by_reason = {}, {}, {}
     for r in rows:
@@ -233,16 +262,19 @@ def preflight(conn, newsletter_id):
     if prev:
         diff["added"] = [_label(r) for k, r in now_keys.items() if k not in before]
         diff["removed"] = [_label(r) for k, r in before.items() if k not in now_keys]
-        diff["changed"] = [(_label(r), before[k]["quantity"], r["quantity"]) for k, r in now_keys.items()
-                           if k in before and before[k]["quantity"] != r["quantity"]]
-    return {"mailing": mailing, "rows": len(rows), "copies": sum(r["quantity"] for r in rows), "red": red,
+        if mail:
+            diff["changed"] = [(_label(r), before[k]["quantity"], r["quantity"]) for k, r in now_keys.items()
+                               if k in before and before[k]["quantity"] != r["quantity"]]
+    return {"channel": channel, "mailing": mailing, "rows": len(rows), "copies": sum(r["quantity"] for r in rows), "red": red,
             "yellow": yellow, "blocked": bool(red), "by_delivery": by_delivery, "by_fund": by_fund,
             "skipped_by_reason": by_reason, "skipped": mailing["skipped"], "diff": diff}
 
 
 def summary_text(check):
     """The plain-words summary for step 2 of Create Mailing."""
-    lines = [f"{check['rows']} addresses, {check['copies']} copies in total."]
+    email = check["channel"] == "Email"
+    lines = [f"{check['rows']} email addresses." if email
+             else f"{check['rows']} addresses, {check['copies']} copies in total."]
     if check["by_delivery"]:
         lines.append("Sent by: " + ", ".join(f"{k} {v}" for k, v in sorted(check["by_delivery"].items())) + ".")
     if check["by_fund"]:
@@ -254,7 +286,7 @@ def summary_text(check):
     d = check["diff"]
     if d["previous"]:
         lines.append(f"Since {d['previous']['issue_label']} ({d['previous']['sent_on']}): {len(d['added'])} added, "
-                     f"{len(d['removed'])} removed, {len(d['changed'])} with different copies.")
+                     f"{len(d['removed'])} removed" + ("." if email else f", {len(d['changed'])} with different copies."))
     else:
         lines.append("This is the first mailing recorded for this newsletter.")
     return "\n".join(lines)
@@ -262,13 +294,17 @@ def summary_text(check):
 
 # ---------- saving a run ----------
 
-def same_label_runs(conn, newsletter_id, label):
-    return conn.execute("SELECT id, sent_on FROM mailing_runs WHERE newsletter_id = ? AND lower(trim(issue_label)) = ? "
-                        "ORDER BY id", (newsletter_id, " ".join(label.split()).lower())).fetchall()
+def same_label_runs(conn, newsletter_id, label, channel="Print"):
+    return conn.execute("SELECT id, sent_on FROM mailing_runs WHERE newsletter_id = ? AND channel = ? "
+                        "AND lower(trim(issue_label)) = ? ORDER BY id",
+                        (newsletter_id, channel, " ".join(label.split()).lower())).fetchall()
 
 
-def create_mailing(conn, newsletter_id, issue_label, out_path, allow_duplicate=False):
-    """Saves the sheet first and records the run only if that worked. Returns the new run id."""
+def create_mailing(conn, newsletter_id, issue_label, out_path, allow_duplicate=False, channel="Print"):
+    """Saves the sheet (or, for channel Email, the email list) first and records the run only if that worked.
+
+    Returns the new run id. Nothing is sent: an email run is a saved list of addresses.
+    """
     require_writable(conn)
     label = " ".join((issue_label or "").split())
     if not label:
@@ -276,18 +312,19 @@ def create_mailing(conn, newsletter_id, issue_label, out_path, allow_duplicate=F
     nl = _newsletter(conn, newsletter_id)
     if nl["archived"]:
         raise MailingError("That newsletter is archived.")
-    dup = same_label_runs(conn, newsletter_id, label)
+    dup = same_label_runs(conn, newsletter_id, label, channel)
     if dup and not allow_duplicate:
         raise DuplicateIssue(label, [d["sent_on"] for d in dup])
-    check = preflight(conn, newsletter_id)
+    check = preflight(conn, newsletter_id, channel)
     if check["blocked"]:
         raise PreflightBlocked(check)
     rows = [{k: r[k] for k in _ROW_COLUMNS} for r in check["mailing"]["rows"]]
     if not rows:
-        raise MailingError("Nobody gets this newsletter by mail right now, so there is nothing to save.")
+        raise MailingError(f"Nobody gets this newsletter by {'email' if channel == 'Email' else 'mail'} right now, "
+                           "so there is nothing to save.")
     run = {"newsletter_id": newsletter_id, "newsletter_name": nl["name"], "fund_name": nl["fund_name"],
-           "issue_label": label, "sent_on": date.today().isoformat()}
-    copies = sum(r["quantity"] for r in rows)
+           "issue_label": label, "sent_on": date.today().isoformat(), "channel": channel}
+    copies = len(rows) if channel == "Email" else sum(r["quantity"] for r in rows)  # one message per address
     backup.backup_both(conn.db_path, "before-mailing")
     exporter.write_run_csv(out_path, run, rows)  # a failure here means no run is recorded
     try:
@@ -295,16 +332,17 @@ def create_mailing(conn, newsletter_id, issue_label, out_path, allow_duplicate=F
             cur = conn.execute(
                 "INSERT INTO mailing_runs (newsletter_id, newsletter_name, fund_name, issue_label, channel, sent_on, "
                 "user, row_count, copy_count, skipped_count, status, created_at) "
-                "VALUES (?, ?, ?, ?, 'Print', ?, ?, ?, ?, ?, 'saved', ?)",
-                (newsletter_id, nl["name"], nl["fund_name"], label, run["sent_on"], getpass.getuser(), len(rows),
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'saved', ?)",
+                (newsletter_id, nl["name"], nl["fund_name"], label, channel, run["sent_on"], getpass.getuser(), len(rows),
                  copies, len(check["skipped"]), now()))
             run_id = cur.lastrowid
             conn.executemany(
                 f"INSERT INTO mailing_run_rows (run_id, {', '.join(_ROW_COLUMNS)}) "
                 f"VALUES (?, {', '.join('?' * len(_ROW_COLUMNS))})",
                 [(run_id, *[r[k] for k in _ROW_COLUMNS]) for r in rows])
-            activity.log(conn, "mailing.create", f"Saved mailing {nl['name']} {label}: {len(rows)} addresses, "
-                         f"{copies} copies", "newsletter", newsletter_id)
+            activity.log(conn, "mailing.create", f"Saved {'email list' if channel == 'Email' else 'mailing'} "
+                         f"{nl['name']} {label}: {len(rows)} addresses" + ("" if channel == "Email" else f", {copies} copies"),
+                         "newsletter", newsletter_id)
     except BaseException:
         if os.path.exists(out_path):
             os.remove(out_path)
@@ -324,6 +362,11 @@ def get_run(conn, run_id):
 
 def run_rows(conn, run_id):
     return conn.execute("SELECT * FROM mailing_run_rows WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()
+
+
+def write_skipped_csv(out_path, skipped):
+    """The people left out of a run and why, for the person making the list."""
+    return exporter.write_skipped_csv(out_path, skipped)
 
 
 def export_run(conn, run_id, out_path):
@@ -360,9 +403,11 @@ def last_sent(conn, kind, entity_id):
 
 def history(conn, kind, entity_id, limit=30):
     """Mailings and logged changes for one person or church, newest first, as {'ts', 'summary'}."""
-    items = [{"ts": r["sent_on"], "summary": f"Mailed {r['issue_label']} ({r['newsletter_name']}): {r['quantity']} copies"}
+    items = [{"ts": r["sent_on"], "summary": (f"Emailed {r['issue_label']} ({r['newsletter_name']})"
+                                               if r["channel"] == "Email" else
+                                               f"Mailed {r['issue_label']} ({r['newsletter_name']}): {r['quantity']} copies")}
              for r in conn.execute(
-                 "SELECT m.sent_on, m.issue_label, m.newsletter_name, r.quantity FROM mailing_run_rows r "
+                 "SELECT m.sent_on, m.issue_label, m.newsletter_name, m.channel, r.quantity FROM mailing_run_rows r "
                  f"JOIN mailing_runs m ON m.id = r.run_id WHERE {_entity_rows(kind)} ORDER BY m.id DESC LIMIT ?",
                  (entity_id, limit))]
     items += [{"ts": r["ts"], "summary": r["summary"]} for r in conn.execute(
@@ -419,6 +464,8 @@ def packing_sheet(conn, run_id):
     run = get_run(conn, run_id)
     if run is None:
         raise MailingError("That mailing was not found.")
+    if run["channel"] == "Email":
+        raise MailingError("An email list has no packing sheet.")
     states = {}
     for r in run_rows(conn, run_id):
         states.setdefault(r["state"] or "No state", []).append(

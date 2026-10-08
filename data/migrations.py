@@ -186,7 +186,22 @@ def _v5():
     ]
 
 
-STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4()), (5, _v5())]
+def _v6():
+    return [
+        """CREATE TABLE email_bounces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_key TEXT NOT NULL,
+            email TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('Hard', 'Soft', 'Manual')),
+            noted_at TEXT NOT NULL,
+            noted_by TEXT,
+            note TEXT,
+            cleared INTEGER NOT NULL DEFAULT 0 CHECK (cleared IN (0, 1)))""",
+        "CREATE INDEX idx_email_bounces_key ON email_bounces(email_key)",
+    ]
+
+
+STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4()), (5, _v5()), (6, _v6())]
 SCHEMA_VERSION = STEPS[-1][0]
 
 

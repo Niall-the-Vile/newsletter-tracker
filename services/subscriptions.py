@@ -2,7 +2,7 @@
 import getpass
 
 from data import activity
-from data.connection import now, require_writable, transaction
+from data.connection import ConflictError, now, require_writable, transaction
 from services import mailings
 
 PENDING_NOTE = "legacy import default, pending review"
@@ -24,11 +24,13 @@ def gets(conn, kind, entity_id):
     """What this person or church gets: active subscriptions and old ones waiting for review."""
     last = mailings.last_sent(conn, kind, entity_id)
     rows = conn.execute(
-        f"SELECT s.id, s.newsletter_id, n.name, s.quantity, s.delivery, s.active, (s.active = 0 AND s.notes = ?) AS pending "
+        f"SELECT s.id, s.newsletter_id, n.name, s.quantity, s.delivery, s.active, s.updated_at, "
+        f"(s.active = 0 AND s.notes = ?) AS pending "
         f"FROM subscriptions_v2 s JOIN newsletters n ON n.id = s.newsletter_id "
         f"WHERE s.{_column(kind)} = ? ORDER BY s.active DESC, n.name", (PENDING_NOTE, entity_id)).fetchall()
     return [{"sub_id": r["id"], "newsletter_id": r["newsletter_id"], "newsletter": r["name"],
              "copies": r["quantity"], "delivery": PLAIN_DELIVERY[r["delivery"]], "pending": bool(r["pending"]),
+             "updated_at": r["updated_at"],
              "last_sent": last.get(r["newsletter_id"], "")}
             for r in rows if r["active"] or r["pending"]]
 
@@ -43,8 +45,15 @@ def _change(conn, sub_id, field, old, new, ts, user, note):
                      "changed_by, note) VALUES (?, ?, ?, ?, ?, ?, ?)", (sub_id, field, str(old), str(new), ts, user, note))
 
 
-def set_subscription(conn, kind, entity_id, newsletter_id, quantity, delivery="Print"):
-    """Adds the newsletter for this person or church, or changes copies and delivery on the existing one."""
+def _stale():
+    return ConflictError("Someone else changed this after you opened it. Close this window and look again.")
+
+
+def set_subscription(conn, kind, entity_id, newsletter_id, quantity, delivery="Print", expected_updated_at=None):
+    """Adds the newsletter for this person or church, or changes copies and delivery on the existing one.
+
+    expected_updated_at is the time the screen last showed; if the row changed since, nothing is saved.
+    """
     require_writable(conn)
     col = _column(kind)
     try:
@@ -69,20 +78,26 @@ def set_subscription(conn, kind, entity_id, newsletter_id, quantity, delivery="P
             cur = conn.execute(
                 f"INSERT INTO subscriptions_v2 ({col}, newsletter_id, quantity, delivery, active, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, 1, ?, ?)", (entity_id, newsletter_id, quantity, delivery, ts, ts))
+            sub_id = cur.lastrowid
             summary = f"Now gets {nl['name']}: {quantity} copies"
         else:
             notes = None if old["notes"] == PENDING_NOTE else old["notes"]
-            conn.execute("UPDATE subscriptions_v2 SET quantity = ?, delivery = ?, active = 1, notes = ?, updated_at = ? "
-                         "WHERE id = ?", (quantity, delivery, notes, ts, old["id"]))
+            cur = conn.execute(
+                "UPDATE subscriptions_v2 SET quantity = ?, delivery = ?, active = 1, notes = ?, updated_at = ? "
+                "WHERE id = ? AND (? IS NULL OR updated_at IS ?)",
+                (quantity, delivery, notes, ts, old["id"], expected_updated_at, expected_updated_at))
+            if cur.rowcount == 0:
+                raise _stale()
+            sub_id = old["id"]
             for field, a, b in (("quantity", old["quantity"], quantity), ("delivery", old["delivery"], delivery),
                                 ("active", old["active"], 1)):
                 _change(conn, old["id"], field, a, b, ts, user, "edited by hand")
             summary = f"{nl['name']} changed to {quantity} copies"
         activity.log(conn, "subscription.set", summary, kind, entity_id)
-    return cur.lastrowid if old is None else old["id"]
+    return sub_id
 
 
-def stop_subscription(conn, sub_id):
+def stop_subscription(conn, sub_id, expected_updated_at=None):
     require_writable(conn)
     ts, user = now(), getpass.getuser()
     with transaction(conn):
@@ -90,7 +105,11 @@ def stop_subscription(conn, sub_id):
                            "WHERE s.id = ?", (sub_id,)).fetchone()
         if row is None:
             raise SubscriptionError("That subscription was not found.")
-        conn.execute("UPDATE subscriptions_v2 SET active = 0, updated_at = ? WHERE id = ?", (ts, sub_id))
+        cur = conn.execute("UPDATE subscriptions_v2 SET active = 0, updated_at = ? "
+                           "WHERE id = ? AND (? IS NULL OR updated_at IS ?)",
+                           (ts, sub_id, expected_updated_at, expected_updated_at))
+        if cur.rowcount == 0:
+            raise _stale()
         _change(conn, sub_id, "active", row["active"], 0, ts, user, "stopped by hand")
         kind, eid = ("person", row["person_id"]) if row["person_id"] else ("church", row["church_id"])
         activity.log(conn, "subscription.stop", f"Stopped getting {row['name']}", kind, eid)

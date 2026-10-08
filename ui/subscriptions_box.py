@@ -115,10 +115,10 @@ class SubscriptionsBox(ttk.Frame):
         dlg = SubscriptionDialog(self, self.conn, g)
         self.wait_window(dlg)
         if dlg.result:
-            self._run(subscriptions.set_subscription, self.kind, self.entity_id, *dlg.result)
+            self._run(subscriptions.set_subscription, self.kind, self.entity_id, *dlg.result, g["updated_at"])
 
     def stop(self):
         g = self._selected()
         if g is not None and messagebox.askyesno("Stop sending", f"Stop sending {g['newsletter']}? "
                                                  "It stays on record and can be added again."):
-            self._run(subscriptions.stop_subscription, g["sub_id"])
+            self._run(subscriptions.stop_subscription, g["sub_id"], g["updated_at"])
