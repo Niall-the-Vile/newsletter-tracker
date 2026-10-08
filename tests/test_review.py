@@ -16,13 +16,13 @@ def old_db(db_path):
     c = sqlite3.connect(db_path)
     c.execute("UPDATE newsletters SET name = 'MAAP Newsletter' WHERE id = 1")
     c.execute("UPDATE newsletters SET name = 'Our Health' WHERE id = 2")
-    c.execute("UPDATE subscriptions SET active = 0 WHERE person_id = 4")   # qty 1 but stopped
-    c.execute("UPDATE people SET active = 0 WHERE id = 7")                 # qty 1 but removed
+    c.execute("UPDATE subscriptions SET active = 0 WHERE person_id = 4")   # stopped
+    c.execute("UPDATE people SET active = 0 WHERE id = 7")                 # removed
     c.commit()
     expected = c.execute("SELECT COUNT(*) FROM subscriptions s JOIN people p ON p.id = s.person_id "
-                         "WHERE s.quantity = 1 AND s.active = 1 AND p.active = 1").fetchone()[0]
+                         "WHERE s.active = 1 AND p.active = 1").fetchone()[0]
     c.close()
-    assert expected == 7
+    assert expected == 23
     return db_path, expected
 
 
@@ -48,7 +48,7 @@ def test_copy_creates_inactive_pending_rows_and_freezes_legacy(old_db, oconn):
     assert review.pending_count(oconn) == old_db[1]
     rows = oconn.execute("SELECT * FROM subscriptions_v2").fetchall()
     assert len(rows) == old_db[1]
-    assert all(r["active"] == 0 and r["quantity"] == 1 and r["notes"] == PENDING and r["delivery"] == "Print"
+    assert all(r["active"] == 0 and r["notes"] == PENDING and r["delivery"] == "Print"
                for r in rows)
     assert as_tuples(legacy_rows(oconn)) == before
     assert review.copy_legacy(oconn) == 0  # nothing new to copy
@@ -150,3 +150,14 @@ def test_no_maap_newsletter_means_nothing_to_copy(conn):
     assert review.count_to_copy(conn) == 0
     with pytest.raises(review.ReviewError):
         review.copy_legacy(conn)
+
+
+def test_rows_with_many_copies_are_copied_with_their_quantity(old_db, oconn):
+    pid = oconn.execute("SELECT person_id FROM subscriptions WHERE newsletter_id = 1 AND active = 1 "
+                        "AND person_id NOT IN (4, 7) LIMIT 1").fetchone()[0]
+    with db.transaction(oconn):
+        oconn.execute("UPDATE subscriptions SET quantity = 40 WHERE person_id = ? AND newsletter_id = 1", (pid,))
+    review.copy_legacy(oconn)
+    row = oconn.execute("SELECT quantity, active, notes FROM subscriptions_v2 WHERE person_id = ?", (pid,)).fetchone()
+    assert (row["quantity"], row["active"], row["notes"]) == (40, 0, PENDING)
+    assert oconn.execute("SELECT COUNT(*) FROM subscriptions_v2").fetchone()[0] == old_db[1]

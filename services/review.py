@@ -28,7 +28,7 @@ def maap_newsletter(conn):
 
 def _legacy_to_copy_sql():
     return ("FROM subscriptions s JOIN people p ON p.id = s.person_id "
-            "WHERE s.newsletter_id = ? AND s.quantity = 1 AND COALESCE(s.active, 1) = 1 "
+            "WHERE s.newsletter_id = ? AND COALESCE(s.active, 1) = 1 "
             "AND COALESCE(p.active, 1) = 1 "
             "AND NOT EXISTS (SELECT 1 FROM subscriptions_v2 v WHERE v.person_id = s.person_id "
             "AND v.newsletter_id = s.newsletter_id)")
@@ -42,7 +42,7 @@ def count_to_copy(conn):
 
 
 def copy_legacy(conn):
-    """Copies old MAAP quantity-1 rows into the review list. Safe to run again: it only adds what is missing."""
+    """Copies every active old MAAP row, keeping its copies, into the review list. Safe to run again: it only adds what is missing."""
     require_writable(conn)
     nl = maap_newsletter(conn)
     if nl is None:
@@ -54,7 +54,7 @@ def copy_legacy(conn):
     with transaction(conn):
         cur = conn.execute(
             "INSERT INTO subscriptions_v2 (person_id, newsletter_id, quantity, delivery, active, notes, "
-            "created_at, updated_at) SELECT s.person_id, s.newsletter_id, 1, 'Print', 0, ?, ?, ? "
+            "created_at, updated_at) SELECT s.person_id, s.newsletter_id, MAX(COALESCE(s.quantity, 1), 1), 'Print', 0, ?, ?, ? "
             + _legacy_to_copy_sql(), (PENDING_NOTE, ts, ts, nl["id"]))
         activity.log(conn, "review.copy",
                      f"Copied {cur.rowcount} old MAAP subscriptions into the review list")
