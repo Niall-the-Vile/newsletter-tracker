@@ -204,3 +204,36 @@ def test_import_links_people_to_an_existing_church_and_lists_near_matches(conn):
     linked = conn.execute("SELECT last_name FROM people WHERE church_id IS NOT NULL").fetchall()
     assert [r[0] for r in linked] == ["One"]
     assert conn.execute("SELECT church_name FROM people WHERE last_name = 'Two'").fetchone()[0] == "Fake Chapel 1"
+
+
+def test_map_row_strips_control_characters_and_caps_length():
+    mapping = importer.build_mapping(["First Name", "Last Name", "Church Name"])
+    bell, nul = chr(7), chr(0)
+    row = {"First Name": f"Ann{bell}{nul}\tMarie\n", "Last Name": "L" * 500, "Church Name": "C" * 300}
+    out = importer.map_row(row, mapping)
+    assert out["first_name"] == "Ann Marie"
+    assert len(out["last_name"]) == importer.MAX_FIELD and len(out["church_name"]) == importer.MAX_FIELD
+    assert importer.clean_text("n" * 2000, importer.MAX_NOTES) == "n" * importer.MAX_NOTES
+
+
+def test_dry_run_counts_unreadable_rows_from_the_cp1252_fallback(conn, tmp_path):
+    path = tmp_path / "old.csv"
+    path.write_bytes(b"First Name,Last Name,Address 1,Zip\r\nAnn,Lee,1 St,17000\r\nJos\x81,Roe,2 St,17000\r\n")
+    headers, rows, mapping = load(path)
+    p = importing.plan_import(conn, headers, rows, mapping)
+    assert p["summary"]["unreadable_rows"] == 1 and p["summary"]["new"] == 2
+
+
+def test_dry_run_counts_churches_that_would_change_fund(conn):
+    from services import churches
+    maap = conn.execute("SELECT id FROM funds WHERE name = 'MAAP'").fetchone()[0]
+    ch = conn.execute("INSERT INTO churches (name, name_key, fund_id) VALUES ('Fake Church', 'fake church', ?)",
+                      (maap,)).lastrowid
+    rep = db.upsert_person(conn, {"first_name": "Rita", "last_name": "Rep", "address1": "1 St", "zip": "17000"})
+    churches.add_rep(conn, ch, rep)
+    headers = ["First Name", "Last Name", "Address 1", "Zip", "Fund"]
+    same = [dict(zip(headers, ["Rita", "Rep", "1 St", "17000", "MAAP"]))]
+    other = [dict(zip(headers, ["Rita", "Rep", "1 St", "17000", "AMCA"]))]
+    mapping = importer.build_mapping(headers)
+    assert importing.plan_import(conn, headers, same, mapping)["summary"]["churches_changing_fund"] == 0
+    assert importing.plan_import(conn, headers, other, mapping)["summary"]["churches_changing_fund"] == 1

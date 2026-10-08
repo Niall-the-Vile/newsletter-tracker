@@ -130,6 +130,11 @@ class ImportTab(ttk.Frame):
         if s["unknown_funds"]:
             lines.append("  Fund names not recognised (these rows get no fund): "
                          + ", ".join(f"{k} ({v})" for k, v in s["unknown_funds"].items()))
+        if s["unreadable_rows"]:
+            lines.append(f"  Rows with unreadable characters (the file may not be saved as UTF-8): {s['unreadable_rows']}")
+        if s["churches_changing_fund"]:
+            lines.append(f"  Churches that would change fund because a rep's row has a different Fund: "
+                         f"{s['churches_changing_fund']}")
         lines.append("  Columns that will be ignored: " + (", ".join(map(str, p["ignored_columns"])) or "none"))
         self._set_report(lines)
         self.near_tree.delete(*self.near_tree.get_children())

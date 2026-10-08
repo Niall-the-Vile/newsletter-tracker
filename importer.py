@@ -10,6 +10,10 @@ import csv
 import io
 import os
 import re
+import unicodedata
+
+MAX_FIELD = 200
+MAX_NOTES = 1000
 
 FIELD_ALIASES = {
     "first_name": ["first name", "first", "firstname"],
@@ -136,6 +140,13 @@ def split_name(raw):
     return {k: v for k, v in out.items() if v}
 
 
+def clean_text(value, limit=MAX_FIELD):
+    """Whitespace of any kind becomes one space, other control characters go, and the text is cut to the limit."""
+    text = "".join(" " if ch.isspace() else ch for ch in str(value)
+                   if ch.isspace() or unicodedata.category(ch) != "Cc")
+    return text.strip()[:limit]
+
+
 def map_row(row, mapping):
     """Converts one raw row (dict keyed by original header) into a people-table dict."""
     out = {}
@@ -144,14 +155,14 @@ def map_row(row, mapping):
             continue
         val = row.get(header)
         if field == "zip":
-            out[field] = normalize_zip(val)
+            out[field] = clean_text(normalize_zip(val), 20) if val is not None else None
         else:
-            out[field] = str(val).strip() if val is not None else None
+            out[field] = clean_text(val, MAX_NOTES if field == "notes" else MAX_FIELD) if val is not None else None
 
     if "full_name" in mapping and not out.get("first_name") and not out.get("last_name"):
         raw = row.get(mapping["full_name"])
         if raw:
-            out.update(split_name(raw))
+            out.update({k: v[:MAX_FIELD] for k, v in split_name(clean_text(raw)).items()})
 
     # Normalize blank strings to None
     for k, v in list(out.items()):

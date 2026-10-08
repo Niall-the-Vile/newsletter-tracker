@@ -12,6 +12,7 @@ from data import activity
 from data.connection import now, require_writable, transaction
 from services import backup, grouping
 
+UNREADABLE = chr(0xFFFD)  # what the cp1252 fallback leaves where it could not read a character
 SKIP_BLANK = "blank row"
 SKIP_NO_NAME = "no name"
 SKIP_REPEAT = "repeats an earlier row in this file"
@@ -44,8 +45,11 @@ def plan_import(conn, headers, rows, mapping, file_fund_id=None):
     skipped, unknown_funds = Counter(), Counter()
     file_churches = Counter()  # group key -> rows, with one label each
     labels = {}
+    garbled, fund_churches = 0, set()
     for number, row in enumerate(rows, start=2):  # row 1 is the header
         mapped = importer.map_row(row, mapping)
+        if any(UNREADABLE in str(v) for v in row.values() if v is not None):
+            garbled += 1
         if not any(v for v in mapped.values()):
             skipped[SKIP_BLANK] += 1
             continue
@@ -82,6 +86,12 @@ def plan_import(conn, headers, rows, mapping, file_fund_id=None):
             if church_id is None:
                 file_churches[church_key] += 1
                 labels.setdefault(church_key, " ".join(church.split()))
+        if existing is not None and explicit and fund:
+            rep = conn.execute("SELECT c.id, c.fund_id FROM church_reps r JOIN churches c ON c.id = r.church_id "
+                               "WHERE r.person_id = ? AND r.active = 1 ORDER BY r.id LIMIT 1",
+                               (existing["id"],)).fetchone()
+            if rep and rep["fund_id"] is not None and rep["fund_id"] != fund:
+                fund_churches.add(rep["id"])
         entry = {"row": number, "mapped": mapped, "existing": existing, "fund": fund, "explicit_fund": explicit,
                  "church_id": church_id}
         if existing is None:
@@ -104,7 +114,8 @@ def plan_import(conn, headers, rows, mapping, file_fund_id=None):
         "summary": {"new": counts["new"], "updated": counts["update"], "unchanged": counts["unchanged"],
                     "skipped": sum(skipped.values()), "skip_reasons": dict(skipped),
                     "linked_to_church": sum(1 for e in entries if e["church_id"]),
-                    "unmatched_churches": len(file_churches), "unknown_funds": dict(unknown_funds)},
+                    "unmatched_churches": len(file_churches), "unknown_funds": dict(unknown_funds),
+                    "unreadable_rows": garbled, "churches_changing_fund": len(fund_churches)},
         "near_churches": near,
         "ignored_columns": [h for h in headers if h is not None and str(h).strip() and h not in mapped_headers],
     }
