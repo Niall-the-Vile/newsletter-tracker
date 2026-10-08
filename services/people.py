@@ -76,7 +76,19 @@ def types_and_states(conn):
     return types, states
 
 
-def person_detail(conn, person_id):
+def person_history(conn, person_id):
+    """(items, history_starts) for the History list. Loaded when that list is opened."""
+    return mailings.history(conn, "person", person_id, 20), mailings.history_starts(conn)
+
+
+def names(conn, person_ids):
+    """{id: display name} for these people."""
+    ids = list(person_ids)
+    rows = conn.execute(f"SELECT id, first_name, last_name FROM people WHERE id IN ({','.join('?' * len(ids))})", ids)
+    return {r["id"]: display_name(r["first_name"], r["last_name"]) for r in rows}
+
+
+def person_detail(conn, person_id, history=True):
     person = conn.execute(
         "SELECT p.*, f.name AS fund_name FROM people p LEFT JOIN funds f ON f.id = p.fund_id WHERE p.id = ?",
         (person_id,)).fetchone()
@@ -90,9 +102,8 @@ def person_detail(conn, person_id):
                 for r in conn.execute(
                     "SELECT n.name, s.quantity FROM subscriptions s JOIN newsletters n ON n.id = s.newsletter_id "
                     "WHERE s.person_id = ? AND s.active = 1 ORDER BY n.name", (person_id,))]
-    history = mailings.history(conn, "person", person_id, 20)
-    first_run = mailings.history_starts(conn)
-    return {"person": person, "gets": gets, "history": history, "history_starts": first_run}
+    items = mailings.history(conn, "person", person_id, 20) if history else []
+    return {"person": person, "gets": gets, "history": items, "history_starts": mailings.history_starts(conn)}
 
 
 # ---------- Bulk changes ----------

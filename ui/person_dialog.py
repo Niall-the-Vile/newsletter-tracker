@@ -18,7 +18,7 @@ PERSON_FIELDS = [
     ("address2", "Address 2"),
     ("city", "City"),
     ("state", "State"),
-    ("zip", "Zip"),
+    ("zip", "ZIP"),
     ("home_phone", "Home Phone"),
     ("cell_phone", "Cell Phone"),
     ("email", "Email"),
@@ -32,7 +32,7 @@ class PersonDialog(tk.Toplevel):
         self.conn = conn
         self.person = person
         self.result = False
-        self.title("Edit Recipient" if person else "Add Recipient")
+        self.title("Edit person" if person else "Add person")
         self.resizable(False, False)
         self.vars = {}
 

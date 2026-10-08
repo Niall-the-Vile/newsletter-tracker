@@ -1,3 +1,4 @@
+import time
 from tkinter import messagebox
 
 import pytest
@@ -61,6 +62,9 @@ def test_find_box_shows_the_quick_answer_and_detail_panes_manage_subscriptions(r
     scene = Scene(conn)
     app = App(root, session)
     app.find_var.set("Alpha Church")
+    root.update()
+    assert app.card.cget("text") == ""  # typing waits a moment before searching
+    time.sleep(0.3)
     root.update()
     assert app.card.cget("text") == "Alpha Church: 40 copies, not mailed yet"
     app.find_var.set("")

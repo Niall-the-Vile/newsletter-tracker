@@ -1,11 +1,8 @@
-"""Window furniture shared by every tab: banners, Back up now, and Restore from backup."""
-import sqlite3
+"""Window furniture shared by every tab: banners, Back up now, Restore from backup and the Help menu."""
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from data.connection import ConflictError, ReadOnlyError
-from data.migrations import NewerVersionError
-from services import backup
+from services import backup, diagnostics, errors
 
 HEARTBEAT_MS = 30_000
 AMBER = "#fde7c8"
@@ -14,12 +11,12 @@ YELLOW = "#fff6c2"
 
 def friendly_error_handler(root):
     def handler(exc_type, exc, tb):
-        if issubclass(exc_type, (ReadOnlyError, ConflictError, NewerVersionError, backup.BackupError)):
-            messagebox.showwarning("Newsletter Tracker", str(exc))
-        elif issubclass(exc_type, sqlite3.IntegrityError) and "out of date" in str(exc):
-            messagebox.showwarning("Newsletter Tracker", str(exc))
+        message = errors.friendly_message(exc)
+        if message:
+            messagebox.showwarning("Newsletter Tracker", message)
         else:
-            messagebox.showerror("Something went wrong", f"{exc_type.__name__}: {exc}")
+            messagebox.showerror("Something went wrong", f"{exc}\n\nIf it keeps happening, use Help > Copy "
+                                 "diagnostics and send it to Niall.")
     root.report_callback_exception = handler
 
 
@@ -30,7 +27,7 @@ def _counts_text(counts):
 
 
 class Chrome:
-    def __init__(self, root, parent, session):
+    def __init__(self, root, parent, session, on_get_started=None):
         self.root, self.session = root, session
         friendly_error_handler(root)
 
@@ -61,6 +58,11 @@ class Chrome:
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Exit", command=root.destroy)
         menubar.add_cascade(label="File", menu=self.file_menu)
+        help_menu = tk.Menu(menubar, tearoff=0)
+        if on_get_started:
+            help_menu.add_command(label="Get started", command=on_get_started)
+        help_menu.add_command(label="Copy diagnostics", command=self.copy_diagnostics)
+        menubar.add_cascade(label="Help", menu=help_menu)
         root.config(menu=menubar)
 
         self.refresh_banner()
@@ -104,6 +106,11 @@ class Chrome:
         messagebox.showinfo("Backed up", f"Saved two copies ({_counts_text(backup.legacy_counts(results[0]['counts']))}):\n\n"
                             + "\n".join(r["path"] for r in results))
 
+    def copy_diagnostics(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(diagnostics.diagnostics_text(self.session))
+        messagebox.showinfo("Copied", "The details are copied. Paste them into an email to Niall.")
+
     def restore(self):
         RestoreDialog(self.root, self.session)
 
@@ -126,7 +133,7 @@ class RestoreDialog(tk.Toplevel):
         self.items = backup.list_backups(session.db_path)
         for i, e in enumerate(self.items):
             self.tree.insert("", "end", iid=str(i), values=(
-                e["when"].strftime("%d %b %Y %H:%M"), e["where"], e["reason"], _counts_text(e["counts"])))
+                e["when"].strftime("%d %b %Y %H:%M"), e["where"], e["reason"].replace("-", " "), _counts_text(e["counts"])))
         row = ttk.Frame(self)
         row.pack(fill="x", padx=8, pady=8)
         ttk.Button(row, text="Restore this backup", command=self.do_restore).pack(side="right")

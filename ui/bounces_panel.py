@@ -6,6 +6,9 @@ from data.connection import ConflictError, ReadOnlyError
 from services import bounces
 
 
+KIND_WORDS = {"Hard": "Address does not exist", "Soft": "Mailbox full or away", "Manual": "Marked by hand"}
+
+
 class PasteDialog(tk.Toplevel):
     def __init__(self, master):
         super().__init__(master)
@@ -19,10 +22,10 @@ class PasteDialog(tk.Toplevel):
         row = ttk.Frame(frame)
         row.pack(fill="x")
         ttk.Label(row, text="These are:").pack(side="left")
-        self.kind_var = tk.StringVar(value="Hard")
-        ttk.Combobox(row, textvariable=self.kind_var, values=["Hard", "Soft"], state="readonly",
-                     width=6).pack(side="left", padx=4)
-        ttk.Label(row, text="(Hard: address does not exist. Soft: mailbox full or away; skipped after 3 in a row.)",
+        self.kind_var = tk.StringVar(value=KIND_WORDS["Hard"])
+        ttk.Combobox(row, textvariable=self.kind_var, values=[KIND_WORDS["Hard"], KIND_WORDS["Soft"]],
+                     state="readonly", width=22).pack(side="left", padx=4)
+        ttk.Label(row, text="(A full or away mailbox is skipped after 3 in a row.)",
                   foreground="#666666").pack(side="left")
         btns = ttk.Frame(frame)
         btns.pack(anchor="e", pady=(8, 0))
@@ -32,7 +35,7 @@ class PasteDialog(tk.Toplevel):
         self.grab_set()
 
     def ok(self):
-        self.result = (self.text.get("1.0", "end"), self.kind_var.get())
+        self.result = (self.text.get("1.0", "end"), "Soft" if self.kind_var.get() == KIND_WORDS["Soft"] else "Hard")
         self.destroy()
 
 
@@ -46,8 +49,8 @@ class BouncesPanel(ttk.Frame):
         frame.pack(fill="both", expand=True)
         cols = ("email", "kind", "times", "status", "who", "last")
         self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
-        for col, head, w in zip(cols, ("Email address", "Type", "Times", "Email is", "People with it now", "Last"),
-                                (260, 70, 60, 150, 120, 90)):
+        for col, head, w in zip(cols, ("Email address", "Why", "Times", "Email is", "People with it now", "Last"),
+                                (240, 160, 50, 150, 120, 90)):
             self.tree.heading(col, text=head)
             self.tree.column(col, width=w, anchor="w")
         vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -64,9 +67,9 @@ class BouncesPanel(ttk.Frame):
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
         for b in bounces.list_bounces(self.conn):
-            status = "Skipped" if b["skipped"] else f"Watching ({b['soft']} of {bounces.SOFT_LIMIT} soft)"
+            status = "Left out" if b["skipped"] else f"Watching ({b['soft']} of {bounces.SOFT_LIMIT})"
             self.tree.insert("", "end", iid=b["key"], values=(
-                b["email"], b["kind"], b["count"], status, b["holders"] or "Nobody now", b["last"]))
+                b["email"], KIND_WORDS.get(b["kind"], b["kind"]), b["count"], status, b["holders"] or "Nobody now", b["last"]))
 
     def _try(self, fn, *args):
         try:

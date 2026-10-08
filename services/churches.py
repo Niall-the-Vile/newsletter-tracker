@@ -10,12 +10,17 @@ from data import activity
 from data.connection import now, require_writable, transaction
 from services import mailings, subscriptions
 
-NO_CONTACT = "No contact"
-NEEDS_DEFAULT = "Needs a default"
+NO_CONTACT = "No rep to send to"
+NEEDS_DEFAULT = "Pick who gets church mail"
 
 _DEFAULT_NAME = (
     "(SELECT TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')) FROM church_reps r "
     "JOIN people p ON p.id = r.person_id WHERE r.church_id = c.id AND r.is_default = 1 AND r.active = 1)")
+
+
+_OUTCOME_TEXT = {"promoted": "; another rep now receives church mail", "chosen": "; the chosen rep now receives church mail",
+                 "needs_default": "; someone needs to be picked to receive church mail",
+                 "no_contact": "; nobody receives this church's mail now"}
 
 
 class RepError(Exception):
@@ -26,7 +31,7 @@ class DefaultChoiceNeeded(Exception):
     """Several reps are left and none was chosen. candidates are the person ids to choose from."""
 
     def __init__(self, church_id, candidates):
-        super().__init__("Choose which rep should be the main contact.")
+        super().__init__("Choose which rep should receive this church's mail.")
         self.church_id = church_id
         self.candidates = candidates
 
@@ -100,7 +105,7 @@ def _end_link(conn, church_id, person_id, chosen, ask, parent_id=None):
             outcome = "needs_default"
     elif settle_single_rep(conn, church_id):
         outcome = "promoted"
-    activity.log(conn, "church.rep_end", f"{_person_name(conn, person_id)} is no longer a rep ({outcome})",
+    activity.log(conn, "church.rep_end", f"{_person_name(conn, person_id)} is no longer a rep{_OUTCOME_TEXT.get(outcome, '')}",
                  "church", church_id, parent_id)
     return outcome
 
@@ -134,7 +139,7 @@ def make_default(conn, church_id, person_id):
         if _link(conn, church_id, person_id) is None:
             raise RepError("That person is not a rep of this church.")
         _set_default(conn, church_id, person_id)
-        activity.log(conn, "church.make_default", f"{_person_name(conn, person_id)} is now the main contact",
+        activity.log(conn, "church.make_default", f"{_person_name(conn, person_id)} now receives church mail",
                      "church", church_id)
 
 
@@ -212,7 +217,12 @@ def church_states(conn):
         "SELECT DISTINCT state FROM churches WHERE active = 1 AND state IS NOT NULL AND state != '' ORDER BY 1")]
 
 
-def church_detail(conn, church_id):
+def church_history(conn, church_id):
+    """(items, history_starts) for the History list. Loaded when that list is opened."""
+    return mailings.history(conn, "church", church_id, 20), mailings.history_starts(conn)
+
+
+def church_detail(conn, church_id, history=True):
     church = conn.execute(
         "SELECT c.*, f.name AS fund_name FROM churches c LEFT JOIN funds f ON f.id = c.fund_id WHERE c.id = ?",
         (church_id,)).fetchone()
@@ -224,9 +234,9 @@ def church_detail(conn, church_id):
         "ORDER BY r.is_default DESC, p.last_name, p.first_name", (church_id,)).fetchall()
     members = conn.execute("SELECT COUNT(*) FROM people WHERE church_id = ? AND COALESCE(active, 1) = 1",
                            (church_id,)).fetchone()[0]
-    history = mailings.history(conn, "church", church_id, 20)
+    history_items = mailings.history(conn, "church", church_id, 20) if history else []
     default_name = next((" ".join(filter(None, [r["first_name"], r["last_name"]])) for r in reps
                          if r["is_default"]), None)
-    return {"church": church, "reps": reps, "members": members, "history": history,
+    return {"church": church, "reps": reps, "members": members, "history": history_items,
             "gets": subscriptions.gets(conn, "church", church_id), "history_starts": mailings.history_starts(conn),
             "contact": contact_label(default_name, len(reps))}

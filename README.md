@@ -1,75 +1,129 @@
 # Newsletter Tracker
 
-Tracks who needs which newsletter, and how many copies, across:
+Keeps track of who gets which newsletter, how many copies, and how it is sent (by mail, by email, or both).
+It makes the mailing sheet for each issue and remembers every past mailing.
 
-- **Recipients** — a master directory of people (reps and members), with church, conference,
-  title, address, phone, and email.
-- **Newsletters** — the publications you send (starts with *MAAP Newsletter* and *Our Health*;
-  add more anytime from the Newsletters tab).
-- **Subscriptions** — which recipients get which newsletter, and the quantity each one needs
-  (e.g. a church rep who needs 15 copies of the MAAP Newsletter to put in mailboxes, vs. an
-  "Our Health" member who gets 1 copy mailed straight to them).
+This folder holds the program only. No names, addresses or email addresses belong in it. Never put the
+data file, a backup or a mailing sheet in a code repository.
 
-## Running it
+## How to run it
 
-Requires Python 3 (already installed on this machine) and the `openpyxl` package for reading
-`.xlsx` files:
+1. Python 3 and one add-on are needed once per PC: `pip install -r requirements.txt` (this adds `openpyxl`,
+   which reads Excel files).
+2. Double-click **run.bat**. (Or run `python main.py`.)
+3. The first time, choose the shared data file on OneDrive. Everyone points at the same file.
+   Each person keeps their own copy of this program folder. To set up a new PC, run **fresh_copy.bat**.
 
-```bash
-pip install -r requirements.txt
-```
+The window title shows the program version and which data file you are using.
 
-Then either double-click **run.bat**, or run:
+## The three tabs
 
-```bash
-python main.py
-```
+**People & Churches** is one list of everybody. Use the Find box at the top (it works from any tab), or filter by
+Type, Fund and State. Tick **Needs attention** to see people with no fund or no full address, and churches that
+still need someone picked to receive church mail. Click a row to see the details on the right:
 
-### First run
+- **What they get**: each newsletter, how many copies, how it is sent, and when it was last mailed.
+  Use Add, Change copies and Stop sending.
+- **Reps** (for a church): the star marks the rep who receives the church's mail. Use *Receives church mail* to
+  move the star, Add rep, Remove rep, or Move a rep to another church.
+- **History**: past mailings and changes for that person or church. It loads when you open the tab.
 
-You'll be asked where the data file should live. Choose the default (next to the program) for
-a single-user setup, or point it at a location on the shared Anabaptist Brotherhood OneDrive so
-everyone's copy of the app uses the same data. Each person needs their own copy of this program
-folder, but they should all be pointed at the **same** `.db` file for the data to be shared.
+Select several people and use **Set fund...** to give them all a fund at once. **Remove** takes people off the
+list but keeps them on file. Tick **Show removed** and press **Restore** to bring them back. Removing more than
+10 people at once asks you to type the number.
 
-> **Note on sharing one file over OneDrive:** this works well as long as two people aren't
-> editing at the exact same moment. If that ever happens you may see a "database is locked"
-> message — just wait a few seconds and try again. For a small team doing occasional updates,
-> this is a non-issue in practice.
+**Mailings** lists every past mailing. **Create mailing...** makes a new one (see below). **Open** shows who was
+in a past mailing.
 
-## Using it
+**Setup** has Newsletters, Funds, Old subscriptions, Church grouping, Import, Bounces and Activity.
 
-- **Recipients tab** — add, edit, search, and filter your master list of people. Each person
-  has a Type (Member / Rep / Other).
-- **Mailings tab** � "Create mailing..." asks for the newsletter and an issue label, shows a summary
-  with the problems to fix and who was left out (and why), then saves the CSV sheet. The mailing is
-  only recorded once the file has saved. Open a past mailing to see its addresses, save the exact
-  same file again, or get a packing sheet by state and church.
-- **Delivery and email lists** - each newsletter a person or church gets is sent by Mail, Email or Both (shown with a colour; Both rows are marked BOTH in the list). In Create mailing, choose Email list to save a list of addresses; people who get it by Both are in the mailing sheet and the email list. Nothing is sent from this program.
-- **Setup > Bounces** - mark an email address as bounced, or paste in a list of bounced addresses. A bounced address is left out of email lists (a soft bounce only after 3 in a row) until the address is corrected.
-- **Setup > Newsletters** � add and rename newsletters, limit one to a fund, archive or delete.
-  Each person's or church's copies and delivery are changed in the People & Churches detail pane.
-- **Import tab** — bring in an existing CSV or Excel mailing list. It auto-detects the columns
-  used in your existing files (Master/CLP-style "First Name/Last Name/Address 1/..." or the
-  "Our Health" quarterly export style "Name/PrimaryAddressLine1/..."). Matching people (same
-  name + address) get updated instead of duplicated, so re-importing a refreshed list is safe.
-  You can optionally subscribe everyone in the imported file to a newsletter at the same time.
+## Making a mailing
 
-## Data model
+1. On the Mailings tab press **Create mailing...**
+2. Pick the newsletter and type an **issue label** such as `Fall 2026`. Choose *Mailing sheet (by post)* or
+   *Email list*. Nothing is ever sent by this program. The email list is only a list of addresses.
+3. Read the summary. Anything under **Fix before saving** must be fixed first (for example no address, or a fund
+   that does not match the newsletter). **Worth a look** items are warnings. **Show skipped** lists who was left
+   out and why. The summary also says who was added or removed since the last issue.
+4. Press **Save the sheet...** and choose where to put the file. The mailing is only recorded once the file has
+   saved. If saving fails, nothing is recorded.
 
-```
-people           one row per person (rep or member)
-newsletters      one row per publication
-subscriptions    person <-> newsletter, with a quantity (copies needed)
-```
+A church that gets 40 copies is one row addressed to the rep who receives church mail. That rep does not also get a
+personal row for the same newsletter. Someone who gets a newsletter by **Both** is in the mailing sheet and in the
+email list.
 
-## Churches, reps and importing
+If you use an issue label that was already made, the program asks before making another.
 
-- **People & Churches**: set Type to *Church* to list churches. Select one to see its reps. The star marks the main
-  contact; use *Make default* to move it. Tick *Needs attention* to list churches with several reps and no main contact.
-- **Setup > Church grouping**: checks church names (name plus conference, or state when there is no conference) and
-  shows what would be created. Nothing is saved until you press Create. Similar names can be merged by hand, and an
-  earlier run can be undone.
-- **Setup > Import**: choosing a file shows what would change (new, updated, skipped and why, similar church names,
-  ignored columns) before anything is saved. Blank cells never erase existing data, and subscribing everyone is off
-  unless you tick it and pick a newsletter.
+## Issue labels
+
+The label is the name of the issue, such as `Fall 2026` or `Spring 2027`. It goes on the mailing sheet, in the
+list of past mailings, and in each person's History. Use the same style every time so the list sorts well.
+
+## Past mailings
+
+Open a past mailing to see exactly who was in it, with their address and copies as they were that day. Later
+changes to a person, church or address never change a past mailing. Press **Save the file again...** to get the
+same file back, byte for byte. **Save packing sheet...** gives a sheet by state and church with the issue total.
+Past mailings are kept forever. A newsletter that has been mailed cannot be deleted; it is archived instead.
+
+## Backups and restore
+
+- A backup is made automatically the first time the program opens each day, and before every import, bulk change
+  or mailing. The last 30 are kept.
+- Each backup is saved twice: in a `backups` folder next to the data file, and on your own PC in
+  `%LOCALAPPDATA%\NewsletterTracker\backups`.
+- **File > Back up now** (or the button at the top) makes one on demand.
+- **File > Restore from backup...** lists the backups with how many people they hold. It makes a fresh backup
+  of today's data first, then goes back to the one you choose. Everyone else must close the program first.
+
+## Two people at once
+
+Only one person edits at a time. If someone else already has the program open, yours opens **view only**, with a
+note such as "Maria is editing since 10:42". If their program has been quiet for two minutes, a **Take over
+editing** button appears. Use it only if you are sure they have closed it.
+
+If OneDrive makes an extra copy of the data file (a name like `newsletter_tracker-PC1.db`), the program warns you.
+Ask Niall before using either one.
+
+## What an update does to the shared file
+
+Programs from before version 2 stored people and subscriptions only. The first person to open the new program on
+the shared file sees a one-time update message.
+
+- Everyone else must close the program first.
+- Two verified backups are made before anything changes, and the update stops if the counts of people,
+  newsletters and subscriptions do not match afterwards.
+- The update only adds new tables. Your existing people, newsletters and subscriptions are not renamed, moved or
+  deleted.
+- After it, an **old copy of the program can look but not change anything**. It shows "This copy of Newsletter
+  Tracker is out of date. Please update your copy from the shared folder." Update the program folder (use
+  fresh_copy.bat) and it works again.
+- A newer data file will not open in an older program. Update the program.
+- The old MAAP subscriptions (one copy each) are not changed by the update. They wait in **Setup > Old
+  subscriptions**, where you choose what they become.
+
+## Other screens in Setup
+
+- **Newsletters**: add, rename, limit a newsletter to a fund, archive or delete.
+- **Funds**: each person or church belongs to one fund. A newsletter with a fund goes only to that fund.
+- **Old subscriptions**: check the old one-copy MAAP subscriptions and move them in one step. You can undo.
+- **Church grouping**: checks church names (name plus conference) and shows what would be created. Nothing is
+  saved until you press Create. Similar names can be merged by hand. An earlier grouping can be undone.
+- **Import**: choose a CSV or Excel list to see what would change before anything is saved. Blank cells never erase
+  what is already on file. Subscribing everyone is off unless you tick it and choose a newsletter.
+- **Bounces**: mark an email address as bounced, or paste in a list. A bounced address is left out of email lists
+  until the address is corrected. A full or away mailbox is left out after 3 in a row.
+- **Activity**: a short log of who changed what.
+
+## Help menu
+
+- **Get started** shows the setup steps and ticks them off as they are done. It opens by itself the first time.
+- **Copy diagnostics** copies the version, data file location, data file version, who is editing and the last
+  backup. Paste it into an email if something looks wrong. It holds no names or addresses from the list.
+
+When something looks wrong with the data, a blue bar under the menu says what, with buttons that open the list
+to fix. Press Hide to dismiss it until the next time you open the program.
+
+## For developers
+
+See TESTING.md.

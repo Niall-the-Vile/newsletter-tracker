@@ -1,5 +1,4 @@
 """Setup > Newsletters: add, rename, the fund a newsletter draws from, archive and delete."""
-import sqlite3
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
@@ -48,8 +47,6 @@ class NewslettersPanel(ttk.Frame):
     def _try(self, fn, *args):
         try:
             return fn(self.conn, *args)
-        except sqlite3.IntegrityError:
-            messagebox.showerror("Newsletter", "A newsletter with that name already exists. Pick a different name.")
         except (ReadOnlyError, ConflictError, ValueError) as e:
             messagebox.showwarning("Newsletter", str(e))
         finally:
@@ -58,7 +55,7 @@ class NewslettersPanel(ttk.Frame):
     def new(self):
         name = simpledialog.askstring("New newsletter", "Newsletter name:", parent=self)
         if name and name.strip():
-            self._try(db.add_newsletter, name.strip())
+            self._try(newsletters.add, name.strip())
 
     def rename(self):
         nid = self._selected()
@@ -67,7 +64,7 @@ class NewslettersPanel(ttk.Frame):
         name = simpledialog.askstring("Rename newsletter", "New name:", parent=self,
                                       initialvalue=self.tree.item(str(nid), "values")[0])
         if name and name.strip():
-            self._try(db.rename_newsletter, nid, name.strip())
+            self._try(newsletters.rename, nid, name.strip())
 
     def set_fund(self):
         nid = self._selected()

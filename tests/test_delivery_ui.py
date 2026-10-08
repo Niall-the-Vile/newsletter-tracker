@@ -67,7 +67,7 @@ def test_mark_bounced_button_and_the_bounces_list_under_setup(root, session):
     panel = app.setup_tab.bounces_panel
     panel.refresh()
     assert len(panel.tree.get_children()) == 1
-    assert panel.tree.item(panel.tree.get_children()[0])["values"][3] == "Skipped"
+    assert panel.tree.item(panel.tree.get_children()[0])["values"][3] == "Left out"
     tab.toggle_bounce()
     root.update()
     assert tab.bounce_btn.cget("text") == "Mark email bounced"

@@ -6,6 +6,7 @@ import db
 from data.connection import ConflictError, ReadOnlyError
 from services import bounces, churches, funds, people
 from ui.church_detail import ChurchDetail
+from ui.history_box import HistoryBox
 from ui.person_dialog import PersonDialog
 from ui.subscriptions_box import CHIP_COLOURS, SubscriptionsBox
 
@@ -66,7 +67,7 @@ class PeopleTab(ttk.Frame):
         self.type_box = self._combo(bar, "Type:", self.type_var, 10)
         self.fund_box = self._combo(bar, "Fund:", self.fund_var, 12)
         self.state_box = self._combo(bar, "State:", self.state_var, 6)
-        ttk.Checkbutton(bar, text="Needs attention (churches: needs a default)", variable=self.attention_var,
+        ttk.Checkbutton(bar, text="Needs attention", variable=self.attention_var,
                         command=self.refresh).pack(side="left", padx=(10, 0))
         ttk.Checkbutton(bar, text="Show removed", variable=self.removed_var,
                         command=self.refresh).pack(side="left", padx=(10, 0))
@@ -135,13 +136,8 @@ class PeopleTab(ttk.Frame):
         tabs.pack(fill="both", expand=True)
         self.subs_box = SubscriptionsBox(tabs, self.conn, self.refresh_list_only)
         self.gets_tree = self.subs_box.tree
-        history = ttk.Frame(tabs, padding=4)
-        self.d_history = tk.Listbox(history, height=8, activestyle="none")
-        self.d_history.pack(fill="both", expand=True, pady=(2, 4))
-        self.d_note = ttk.Label(history, text="", foreground="#666666", wraplength=300)
-        self.d_note.pack(anchor="w")
         tabs.add(self.subs_box, text="What they get")
-        tabs.add(history, text="History")
+        self.history_box = HistoryBox(tabs, height=8)
 
     # ---------- data ----------
 
@@ -235,15 +231,14 @@ class PeopleTab(ttk.Frame):
             self.church_box.show(ids[0] if len(ids) == 1 else None)
             return
         self.subs_box.show("person", None, [])
-        self.d_history.delete(0, "end")
-        self.d_note.config(text="")
+        self.history_box.show(None)
         self.returned_btn.state(["disabled"])
         self.bounce_btn.state(["disabled"])
         if len(ids) != 1:
             self.d_name.config(text="")
             self.d_info.config(text=f"{len(ids)} people selected." if ids else "Select a person to see their details.")
             return
-        d = people.person_detail(self.conn, ids[0])
+        d = people.person_detail(self.conn, ids[0], history=False)
         if d is None:
             return
         p = d["person"]
@@ -264,11 +259,7 @@ class PeopleTab(ttk.Frame):
         self.bounce_btn.config(text="Clear email bounce" if skipped else "Mark email bounced")
         self.bounce_btn.state(["!disabled"] if bounces.is_valid_email(p["email"]) else ["disabled"])
         self.subs_box.show("person", ids[0], d["gets"])
-        for h in d["history"]:
-            self.d_history.insert("end", f"{h['ts'][:10]}  {h['summary']}")
-        starts = d["history_starts"]
-        self.d_note.config(text=f"History starts {starts}." if starts
-                           else "History starts with the first mailing made in this program.")
+        self.history_box.show(lambda: people.person_history(self.conn, ids[0]))
 
     # ---------- actions ----------
 

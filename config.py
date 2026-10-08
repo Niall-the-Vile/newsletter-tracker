@@ -2,8 +2,13 @@
 import json
 import os
 
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "NewsletterTracker")
-CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+def config_dir():
+    return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "NewsletterTracker")
+
+
+def config_path():
+    return os.path.join(config_dir(), "config.json")
 
 
 def local_backup_dir():
@@ -11,21 +16,37 @@ def local_backup_dir():
     return os.path.join(base, "NewsletterTracker", "backups")
 
 
-def get_saved_db_path():
-    if not os.path.exists(CONFIG_PATH):
-        return None
+def _load():
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(config_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
-        path = data.get("db_path")
-        if path and os.path.exists(path):
-            return path
-    except (json.JSONDecodeError, OSError):
-        pass
-    return None
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save(data):
+    os.makedirs(config_dir(), exist_ok=True)
+    with open(config_path(), "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def get_saved_db_path():
+    path = _load().get("db_path")
+    return path if path and os.path.exists(path) else None
 
 
 def save_db_path(path):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"db_path": path}, f)
+    _save({**_load(), "db_path": path})
+
+
+def get_flag(name):
+    """Small per-person yes/no settings, such as whether Get started has been shown."""
+    return bool(_load().get(name))
+
+
+def set_flag(name):
+    try:
+        _save({**_load(), name: True})
+    except OSError:
+        pass

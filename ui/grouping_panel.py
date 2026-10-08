@@ -1,4 +1,4 @@
-"""Setup > Church grouping: check first (nothing is saved), adjust, then confirm. Earlier runs can be undone."""
+"""Setup > Church grouping: check first (nothing is saved), adjust, then confirm. Earlier groupings can be undone."""
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -63,10 +63,10 @@ class GroupingPanel(ttk.Frame):
                   "are wrong.").pack(anchor="w")
         self.role_tree = _tree(page, (("name", "Name", 200), ("church", "Church", 240), ("role", "Will be", 80)), 6)
         ttk.Button(page, text="Switch Rep / Member for selected", command=self.switch_roles).pack(anchor="w", pady=4)
-        page = self._page("Earlier runs")
-        self.run_tree = _tree(page, (("tag", "Run", 160), ("n", "Churches created", 120), ("when", "When", 160)), 6,
+        page = self._page("Earlier groupings")
+        self.run_tree = _tree(page, (("tag", "Grouping", 160), ("n", "Churches created", 120), ("when", "When", 160)), 6,
                               "browse")
-        ttk.Button(page, text="Undo selected run", command=self.undo).pack(anchor="w", pady=4)
+        ttk.Button(page, text="Undo selected grouping", command=self.undo).pack(anchor="w", pady=4)
         self.refresh_runs()
 
     def _page(self, title):
@@ -138,7 +138,7 @@ class GroupingPanel(ttk.Frame):
     def confirm(self):
         s = self.plan["summary"]
         if not messagebox.askyesno("Create churches", f"Create {s['created']} churches and link {s['linked']} "
-                                   "people? A backup is made first, and you can undo this run afterwards.",
+                                   "people? A backup is made first, and you can undo this afterwards.",
                                    parent=self):
             return
         try:
@@ -147,7 +147,7 @@ class GroupingPanel(ttk.Frame):
             messagebox.showwarning("Church grouping", str(e), parent=self)
             return
         messagebox.showinfo("Done", f"{result['created']} churches created and {result['linked']} people linked. "
-                            f"{result['defaults_set']} churches with one rep got a main contact; churches with "
+                            f"{result['defaults_set']} churches with one rep now send church mail to that rep; churches with "
                             "several reps need you to pick one (tick Needs attention, with Type set to Church).",
                             parent=self)
         self.merges, self.separate, self.roles = {}, set(), {}
@@ -165,9 +165,9 @@ class GroupingPanel(ttk.Frame):
     def undo(self):
         sel = self.run_tree.selection()
         if not sel:
-            messagebox.showinfo("Select a run", "Choose a run to undo first.")
+            messagebox.showinfo("Select a grouping", "Choose a grouping to undo first.")
             return
-        if not messagebox.askyesno("Undo", "Remove the churches this run created and unlink their people? "
+        if not messagebox.askyesno("Undo", "Remove the churches this grouping created and unlink their people? "
                                    "People and their church names stay as they are.", parent=self):
             return
         try:

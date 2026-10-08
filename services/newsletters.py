@@ -1,4 +1,7 @@
 """Newsletters in Setup: the list, the fund a newsletter draws from, and archiving."""
+import sqlite3
+
+import db
 from data import activity
 from data.connection import require_writable, transaction
 
@@ -45,3 +48,18 @@ def set_archived(conn, newsletter_id, archived):
         conn.execute("UPDATE newsletters SET archived = ? WHERE id = ?", (1 if archived else 0, newsletter_id))
         activity.log(conn, "newsletter.archive", f"{'Archived' if archived else 'Brought back'} {nl['name']}",
                      "newsletter", newsletter_id)
+
+
+def add(conn, name):
+    """Adds a newsletter. A name already in use raises ValueError."""
+    try:
+        return db.add_newsletter(conn, name)
+    except sqlite3.IntegrityError:
+        raise ValueError("A newsletter with that name already exists. Pick a different name.") from None
+
+
+def rename(conn, newsletter_id, name):
+    try:
+        return db.rename_newsletter(conn, newsletter_id, name)
+    except sqlite3.IntegrityError:
+        raise ValueError("A newsletter with that name already exists. Pick a different name.") from None

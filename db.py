@@ -167,8 +167,8 @@ def subscription_totals(conn, newsletter_id):
 
 def people_not_subscribed(conn, newsletter_id, search=""):
     query = (
-        "SELECT * FROM people WHERE COALESCE(active, 1) = 1 AND id NOT IN "
-        "(SELECT person_id FROM subscriptions WHERE newsletter_id = ?)"
+        "SELECT * FROM people WHERE COALESCE(active, 1) = 1 AND NOT EXISTS "
+        "(SELECT 1 FROM subscriptions s WHERE s.person_id = people.id AND s.newsletter_id = ?)"
     )
     params = [newsletter_id]
     if search:

@@ -1,12 +1,14 @@
-"""Church detail pane: reps with a star on the main contact, Make default, add, remove and move."""
+"""Church detail pane: reps (a star marks who receives church mail), add, remove and move."""
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from data.connection import ConflictError, ReadOnlyError
 from services import churches, people
+from ui.history_box import HistoryBox
 from ui.subscriptions_box import SubscriptionsBox
 
 STAR = "★"
+SEARCH_DELAY_MS = 250
 
 
 class ChooseDialog(tk.Toplevel):
@@ -24,7 +26,8 @@ class ChooseDialog(tk.Toplevel):
         if searchable:
             entry = ttk.Entry(frame, textvariable=self.search_var, width=40)
             entry.pack(fill="x", pady=4)
-            entry.bind("<KeyRelease>", lambda e: self.refresh())
+            self._after = None
+            entry.bind("<KeyRelease>", lambda e: self._debounce())
         self.listbox = tk.Listbox(frame, height=10, width=50, exportselection=False)
         self.listbox.pack(fill="both", expand=True, pady=4)
         self.listbox.bind("<Double-1>", lambda e: self.ok())
@@ -35,6 +38,11 @@ class ChooseDialog(tk.Toplevel):
         self.refresh()
         self.transient(master)
         self.grab_set()
+
+    def _debounce(self):
+        if self._after:
+            self.after_cancel(self._after)
+        self._after = self.after(SEARCH_DELAY_MS, self.refresh)
 
     def refresh(self):
         self.options = self.load(self.search_var.get().strip())[:200]
@@ -55,6 +63,7 @@ class ChurchDetail(ttk.Frame):
         self.conn = conn
         self.on_change = on_change
         self.church_id = None
+        self.flagged = False
         self.d_name = ttk.Label(self, text="", font=("", 12, "bold"), wraplength=300)
         self.d_name.pack(anchor="w")
         self.d_info = ttk.Label(self, text="", justify="left", wraplength=300)
@@ -64,42 +73,39 @@ class ChurchDetail(ttk.Frame):
         ttk.Label(self, text="Reps", font=("", 10, "bold")).pack(anchor="w")
         self.reps_tree = ttk.Treeview(self, columns=("star", "name", "title"), show="headings", height=6,
                                       selectmode="browse")
-        for col, head, w in (("star", "Main", 40), ("name", "Name", 150), ("title", "Title", 90)):
+        for col, head, w in (("star", "Receives church mail", 130), ("name", "Name", 120), ("title", "Title", 70)):
             self.reps_tree.heading(col, text=head)
             self.reps_tree.column(col, width=w, anchor="w")
         self.reps_tree.pack(fill="x", pady=(2, 4))
         row = ttk.Frame(self)
         row.pack(fill="x")
-        for text, cmd in ((f"Make default {STAR}", self.make_default), ("Add rep...", self.add_rep),
-                          ("Remove rep", self.remove_rep), ("Move...", self.move_rep)):
+        ttk.Button(row, text=f"Receives church mail {STAR}", command=self.make_default).pack(side="left")
+        row = ttk.Frame(self)
+        row.pack(fill="x", pady=(4, 0))
+        for text, cmd in (("Add rep...", self.add_rep), ("Remove rep", self.remove_rep), ("Move...", self.move_rep)):
             ttk.Button(row, text=text, command=cmd).pack(side="left", padx=(0, 4))
         self.returned_btn = ttk.Button(self, text="Mark mail returned", command=self.toggle_returned)
         self.returned_btn.pack(anchor="w", pady=(6, 0))
         tabs = ttk.Notebook(self)
         tabs.pack(fill="both", expand=True, pady=(6, 0))
         self.subs_box = SubscriptionsBox(tabs, conn, self.after_change)
-        history = ttk.Frame(tabs, padding=4)
-        self.d_history = tk.Listbox(history, height=6, activestyle="none")
-        self.d_history.pack(fill="both", expand=True, pady=(2, 4))
-        self.d_note = ttk.Label(history, text="", foreground="#666666", wraplength=300)
-        self.d_note.pack(anchor="w")
         tabs.add(self.subs_box, text="What they get")
-        tabs.add(history, text="History")
+        self.history_box = HistoryBox(tabs)
 
     def show(self, church_id):
         self.church_id = church_id
         self.reps_tree.delete(*self.reps_tree.get_children())
-        self.d_history.delete(0, "end")
-        self.d_note.config(text="")
+        self.history_box.show(None)
         self.subs_box.show("church", None, [])
         self.returned_btn.state(["disabled"])
-        d = churches.church_detail(self.conn, church_id) if church_id else None
+        d = churches.church_detail(self.conn, church_id, history=False) if church_id else None
         if d is None:
             self.d_name.config(text="")
             self.d_info.config(text="Select a church to see its reps.")
             self.d_contact.config(text="")
             return
         c = d["church"]
+        self.flagged = bool(c["returned_mail"])
         self.d_name.config(text=c["name"])
         place = ", ".join(filter(None, [c["city"], c["state"]]))
         self.d_info.config(text="\n".join(filter(None, [
@@ -113,11 +119,7 @@ class ChurchDetail(ttk.Frame):
             self.reps_tree.insert("", "end", iid=str(r["person_id"]), values=(
                 STAR if r["is_default"] else "", people.display_name(r["first_name"], r["last_name"]),
                 r["title"] or ""))
-        for h in d["history"]:
-            self.d_history.insert("end", f"{h['ts'][:10]}  {h['summary']}")
-        starts = d["history_starts"]
-        self.d_note.config(text=f"History starts {starts}." if starts
-                           else "History starts with the first mailing made in this program.")
+        self.history_box.show(lambda: churches.church_history(self.conn, church_id))
 
     def _selected_rep(self):
         sel = self.reps_tree.selection()
@@ -139,8 +141,7 @@ class ChurchDetail(ttk.Frame):
     def toggle_returned(self):
         if self.church_id is None:
             return
-        flagged = bool(self.conn.execute("SELECT returned_mail FROM churches WHERE id = ?", (self.church_id,)).fetchone()[0])
-        self._run(people.set_returned_mail, "church", self.church_id, not flagged)
+        self._run(people.set_returned_mail, "church", self.church_id, not self.flagged)
         self.after_change()
 
     def make_default(self):
@@ -160,10 +161,8 @@ class ChurchDetail(ttk.Frame):
             self.after_change()
 
     def _ask_new_default(self, candidates):
-        names = {r["id"]: people.display_name(r["first_name"], r["last_name"]) for r in self.conn.execute(
-            f"SELECT id, first_name, last_name FROM people WHERE id IN ({','.join('?' * len(candidates))})",
-            candidates)}
-        dlg = ChooseDialog(self, "Main contact", "Who should be the main contact for this church now?",
+        names = people.names(self.conn, candidates)
+        dlg = ChooseDialog(self, "Who receives church mail", "Who should receive this church's mail now?",
                            lambda s: [(i, n) for i, n in names.items()], searchable=False)
         self.wait_window(dlg)
         return dlg.choice
@@ -187,8 +186,8 @@ class ChurchDetail(ttk.Frame):
             return
         outcome = self._with_choice(churches.remove_rep, self.church_id, pid)
         if outcome == "no_contact":
-            messagebox.showinfo("No contact", "This church has no reps left, so it is marked No contact and "
-                                "will be skipped in mailings.")
+            messagebox.showinfo("No rep left", "This church has no reps left, so nobody receives its mail "
+                                "and it will be left out of mailings until you add a rep.")
         self.after_change()
 
     def move_rep(self):

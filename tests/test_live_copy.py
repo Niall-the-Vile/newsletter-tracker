@@ -126,3 +126,21 @@ def test_live_copy_church_grouping_dry_run_writes_nothing_and_confirm_can_be_und
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         s.close()
+
+
+def test_live_copy_window_builds_with_health_banner_and_diagnostics(root, copy):
+    from app import App
+    from services import diagnostics, health
+    s = startup.open_session(copy)
+    try:
+        issues = health.health_issues(s.conn)
+        assert all(isinstance(i["text"], str) for i in issues)
+        assert len(health.checklist(s.conn)) == 6
+        assert "Data file version" in diagnostics.diagnostics_text(s)
+        app = App(root, s)
+        root.update()
+        app.people_tab.tree.selection_set(app.people_tab.tree.get_children()[:1])
+        root.update()
+        app.destroy()
+    finally:
+        s.close()
