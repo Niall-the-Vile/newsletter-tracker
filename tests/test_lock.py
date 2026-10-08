@@ -114,3 +114,26 @@ def test_read_only_session_on_old_file_is_not_migrated(legacy_db):
     finally:
         second.close()
         holder.release()
+
+
+def test_old_file_held_by_someone_else_shows_a_plain_message_and_builds_no_ui(legacy_db, monkeypatch):
+    import sqlite3
+    from tkinter import messagebox
+
+    import main
+    path, _ = legacy_db
+    holder = WriterLock(path)
+    holder.acquire()
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda title, text, **k: shown.append(text))
+    second = startup.open_session(path)
+    try:
+        assert second.needs_update
+        assert main.ready_to_open(second) is False
+        assert shown == ["Someone else is editing and the file still needs its one-time update. "
+                         "Try again when they close it."]
+        with pytest.raises(sqlite3.ProgrammingError):
+            second.conn.execute("SELECT 1")  # closed, nothing left open
+        assert os.path.exists(path + ".lock")  # the other person's lock is untouched
+    finally:
+        holder.release()

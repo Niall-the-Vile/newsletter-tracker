@@ -75,6 +75,19 @@ def open_or_ask(db_path):
             config.save_db_path(db_path)
 
 
+NEEDS_UPDATE_MESSAGE = ("Someone else is editing and the file still needs its one-time update. "
+                        "Try again when they close it.")
+
+
+def ready_to_open(session):
+    """False (after saying why) when the file is older than this program and cannot be updated yet."""
+    if not session.needs_update:
+        return True
+    messagebox.showinfo("Newsletter Tracker", NEEDS_UPDATE_MESSAGE)
+    session.close()
+    return False
+
+
 def main():
     root = tk.Tk()
     root.withdraw()
@@ -89,6 +102,9 @@ def main():
     if session is None:
         root.destroy()
         sys.exit(1)
+    if not ready_to_open(session):
+        root.destroy()
+        sys.exit(0)
 
     App(root, session)
     root.deiconify()
