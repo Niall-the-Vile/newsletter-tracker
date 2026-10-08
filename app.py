@@ -22,7 +22,7 @@ class App(ttk.Frame):
         master.title(f"Newsletter Tracker {APP_VERSION} — {session.db_path}")
         master.geometry("1200x700")
         self.pack(fill="both", expand=True)
-        self._card_after = None
+        self._card_after = self._first_run_after = None
         self.get_started = None
         self.chrome = Chrome(master, self, session, self.open_get_started)
 
@@ -52,7 +52,13 @@ class App(ttk.Frame):
         self.find_var.trace_add("write", lambda *a: notebook.select(self.people_tab))
         self.find_var.trace_add("write", lambda *a: self._card_soon())
         if not session.read_only and not config.get_flag(SEEN_GET_STARTED):
-            self.after(400, self._first_run_checklist)
+            self._first_run_after = self.after(400, self._first_run_checklist)
+
+    def destroy(self):
+        for job in (self._card_after, self._first_run_after):
+            if job:
+                self.after_cancel(job)
+        super().destroy()
 
     def _card_soon(self):
         if self._card_after:
