@@ -71,7 +71,8 @@ def test_newsletter_with_runs_cannot_be_deleted(conn):
             "INSERT INTO mailing_runs (newsletter_id, newsletter_name, issue_label, channel, sent_on) "
             "VALUES (1, 'N', 'Fall', 'Print', '2026-10-03')")
     with pytest.raises(sqlite3.IntegrityError):
-        db.delete_newsletter(conn, 1)
+        with transaction(conn):
+            conn.execute("DELETE FROM newsletters WHERE id = 1")
 
 
 def test_activity_is_written_in_the_same_transaction(conn):

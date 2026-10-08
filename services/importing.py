@@ -156,12 +156,15 @@ def apply_import(conn, headers, rows, mapping, file_name, file_fund_id=None, sub
                     changes["updated_at"] = ts
                     conn.execute(f"UPDATE people SET {', '.join(c + ' = :' + c for c in changes)} WHERE id = :id",
                                  {**changes, "id": person_id})
+                    if any(k in changes for k in ("address1", "address2", "city", "state", "zip")):
+                        conn.execute("UPDATE people SET returned_mail = 0 WHERE id = ?", (person_id,))
                     activity.log(conn, "person.import_update", "Updated by import", "person", person_id, batch)
             if e["fund"] and _apply_fund(conn, person_id, e["fund"], e["explicit_fund"], ts):
                 funds_set += 1
             if subscribe:  # keeps an existing, possibly custom, quantity
-                conn.execute("INSERT OR IGNORE INTO subscriptions (person_id, newsletter_id, quantity, active) "
-                             "VALUES (?, ?, ?, 1)", (person_id, newsletter_id, quantity))
+                conn.execute("INSERT OR IGNORE INTO subscriptions_v2 (person_id, newsletter_id, quantity, active, "
+                             "created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+                             (person_id, newsletter_id, quantity, ts, ts))
         s["funds_set"] = funds_set
         activity.set_summary(conn, batch, (
             f"Imported {os.path.basename(file_name)}: {s['new']} new, {s['updated']} updated, "

@@ -23,6 +23,7 @@ PEOPLE_COLUMNS = [
     "notes", "source", "active",
 ]
 
+ADDRESS_FIELDS = ["address1", "address2", "city", "state", "zip"]
 
 # ---------- People ----------
 
@@ -40,9 +41,15 @@ def upsert_person(conn, data, person_id=None):
                 for k in PEOPLE_COLUMNS
             }
             merged["updated_at"] = ts
+            address_changed = existing is not None and any(
+                (existing[k] or "") != (merged[k] or "") for k in ADDRESS_FIELDS)
             set_clause = ", ".join(f"{col} = :{col}" for col in merged)
             merged["id"] = person_id
             conn.execute(f"UPDATE people SET {set_clause} WHERE id = :id", merged)
+            if address_changed:  # a new address clears the returned-mail flag
+                conn.execute("UPDATE people SET returned_mail = 0 WHERE id = ?", (person_id,))
+                conn.execute("UPDATE churches SET returned_mail = 0 WHERE id IN (SELECT church_id FROM church_reps "
+                             "WHERE person_id = ? AND is_default = 1 AND active = 1)", (person_id,))
             activity.log(conn, "person.update", "Edited a person", "person", person_id)
             return person_id
         data = {k: data.get(k) for k in PEOPLE_COLUMNS}
@@ -83,8 +90,9 @@ def person_subscriptions_summary(conn, person_id):
 
 # ---------- Newsletters ----------
 
-def list_newsletters(conn):
-    return conn.execute("SELECT * FROM newsletters ORDER BY name").fetchall()
+def list_newsletters(conn, include_archived=False):
+    where = "" if include_archived else " WHERE archived = 0"
+    return conn.execute(f"SELECT * FROM newsletters{where} ORDER BY name").fetchall()
 
 
 def add_newsletter(conn, name, description=""):
@@ -106,9 +114,19 @@ def rename_newsletter(conn, newsletter_id, new_name, description=""):
 
 
 def delete_newsletter(conn, newsletter_id):
+    """Deletes a newsletter nothing was ever sent from. Otherwise archives it, so saved mailings keep their link."""
     with transaction(conn):
+        used = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM mailing_runs WHERE newsletter_id = ?) "
+            "OR EXISTS (SELECT 1 FROM subscriptions_v2 WHERE newsletter_id = ?)", (newsletter_id, newsletter_id)
+        ).fetchone()[0]
+        if used:
+            conn.execute("UPDATE newsletters SET archived = 1 WHERE id = ?", (newsletter_id,))
+            activity.log(conn, "newsletter.archive", "Archived a newsletter", "newsletter", newsletter_id)
+            return "archived"
         conn.execute("DELETE FROM newsletters WHERE id = ?", (newsletter_id,))
         activity.log(conn, "newsletter.delete", "Deleted a newsletter", "newsletter", newsletter_id)
+        return "deleted"
 
 
 # ---------- Subscriptions ----------

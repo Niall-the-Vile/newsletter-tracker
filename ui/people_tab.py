@@ -3,11 +3,12 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 import db
+from data.connection import ConflictError, ReadOnlyError
 from services import churches, funds, people
 from ui.church_detail import ChurchDetail
 from ui.person_dialog import PersonDialog
+from ui.subscriptions_box import SubscriptionsBox
 
-CHIP_COLOURS = {"Mail": "#dbe9f7", "Email": "#dff2df", "Both": "#f6e0b8"}
 SEARCH_DELAY_MS = 250
 ALL_FUNDS, NO_FUND_LABEL = "All funds", "No fund"
 CHURCH = "Church"
@@ -124,19 +125,19 @@ class PeopleTab(ttk.Frame):
         self.d_info = ttk.Label(self.person_box, text="Select a person to see their details.", justify="left",
                                 wraplength=300)
         self.d_info.pack(anchor="w", pady=(2, 8))
-        ttk.Label(self.person_box, text="What they get", font=("", 10, "bold")).pack(anchor="w")
-        self.gets_tree = ttk.Treeview(self.person_box, columns=("news", "copies", "delivery"), show="headings", height=4)
-        for col, head, w in (("news", "Newsletter", 130), ("copies", "Copies", 50), ("delivery", "Sent by", 60)):
-            self.gets_tree.heading(col, text=head)
-            self.gets_tree.column(col, width=w, anchor="w")
-        for name, colour in CHIP_COLOURS.items():
-            self.gets_tree.tag_configure(name, background=colour)
-        self.gets_tree.pack(fill="x", pady=(2, 8))
-        ttk.Label(self.person_box, text="History", font=("", 10, "bold")).pack(anchor="w")
-        self.d_history = tk.Listbox(self.person_box, height=8, activestyle="none")
+        self.returned_btn = ttk.Button(self.person_box, text="Mark mail returned", command=self.toggle_returned)
+        self.returned_btn.pack(anchor="w", pady=(0, 6))
+        tabs = ttk.Notebook(self.person_box)
+        tabs.pack(fill="both", expand=True)
+        self.subs_box = SubscriptionsBox(tabs, self.conn, self.refresh_list_only)
+        self.gets_tree = self.subs_box.tree
+        history = ttk.Frame(tabs, padding=4)
+        self.d_history = tk.Listbox(history, height=8, activestyle="none")
         self.d_history.pack(fill="both", expand=True, pady=(2, 4))
-        self.d_note = ttk.Label(self.person_box, text="", foreground="#666666", wraplength=300)
+        self.d_note = ttk.Label(history, text="", foreground="#666666", wraplength=300)
         self.d_note.pack(anchor="w")
+        tabs.add(self.subs_box, text="What they get")
+        tabs.add(history, text="History")
 
     # ---------- data ----------
 
@@ -227,9 +228,10 @@ class PeopleTab(ttk.Frame):
         if church:
             self.church_box.show(ids[0] if len(ids) == 1 else None)
             return
-        self.gets_tree.delete(*self.gets_tree.get_children())
+        self.subs_box.show("person", None, [])
         self.d_history.delete(0, "end")
         self.d_note.config(text="")
+        self.returned_btn.state(["disabled"])
         if len(ids) != 1:
             self.d_name.config(text="")
             self.d_info.config(text=f"{len(ids)} people selected." if ids else "Select a person to see their details.")
@@ -244,10 +246,12 @@ class PeopleTab(ttk.Frame):
             lines.append(p["church_name"])
         lines.append(", ".join(filter(None, [p["address1"], p["address2"], p["city"], p["state"], p["zip"]])))
         lines.append("  ".join(filter(None, [p["email"], p["cell_phone"] or p["home_phone"]])))
+        if p["returned_mail"]:
+            lines.append("Mail was returned from this address.")
         self.d_info.config(text="\n".join(l for l in lines if l))
-        for g in d["gets"]:
-            label = g["newsletter"] + (" (pending review)" if g["pending"] else "")
-            self.gets_tree.insert("", "end", values=(label, g["copies"], g["delivery"]), tags=(g["delivery"],))
+        self.returned_btn.config(text="Clear returned-mail flag" if p["returned_mail"] else "Mark mail returned")
+        self.returned_btn.state(["!disabled"])
+        self.subs_box.show("person", ids[0], d["gets"])
         for h in d["history"]:
             self.d_history.insert("end", f"{h['ts'][:10]}  {h['summary']}")
         starts = d["history_starts"]
@@ -306,6 +310,17 @@ class PeopleTab(ttk.Frame):
                 return
         people.remove_people(self.conn, ids, typed)
         self.refresh()
+
+    def toggle_returned(self):
+        ids = self.selected_ids()
+        if len(ids) != 1:
+            return
+        flagged = bool(db.get_person(self.conn, ids[0])["returned_mail"])
+        try:
+            people.set_returned_mail(self.conn, "person", ids[0], not flagged)
+        except (ReadOnlyError, ConflictError) as e:
+            messagebox.showwarning("Returned mail", str(e))
+        self.refresh_list_only()
 
     def restore(self):
         ids = self.selected_ids()

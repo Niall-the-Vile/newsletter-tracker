@@ -8,6 +8,7 @@ from datetime import date
 
 from data import activity
 from data.connection import now, require_writable, transaction
+from services import mailings, subscriptions
 
 NO_CONTACT = "No contact"
 NEEDS_DEFAULT = "Needs a default"
@@ -59,7 +60,8 @@ def _set_default(conn, church_id, person_id):
                  (church_id,))
     conn.execute("UPDATE church_reps SET is_default = 1 WHERE church_id = ? AND person_id = ? AND active = 1",
                  (church_id, person_id))
-    conn.execute("UPDATE churches SET no_contact = 0, updated_at = ? WHERE id = ?", (now(), church_id))
+    conn.execute("UPDATE churches SET no_contact = 0, returned_mail = 0, updated_at = ? WHERE id = ?",
+                 (now(), church_id))
 
 
 def settle_single_rep(conn, church_id):
@@ -220,9 +222,9 @@ def church_detail(conn, church_id):
         "ORDER BY r.is_default DESC, p.last_name, p.first_name", (church_id,)).fetchall()
     members = conn.execute("SELECT COUNT(*) FROM people WHERE church_id = ? AND COALESCE(active, 1) = 1",
                            (church_id,)).fetchone()[0]
-    history = conn.execute("SELECT ts, summary FROM activity_log WHERE entity_type = 'church' AND entity_id = ? "
-                           "ORDER BY id DESC LIMIT 20", (church_id,)).fetchall()
+    history = mailings.history(conn, "church", church_id, 20)
     default_name = next((" ".join(filter(None, [r["first_name"], r["last_name"]])) for r in reps
                          if r["is_default"]), None)
     return {"church": church, "reps": reps, "members": members, "history": history,
+            "gets": subscriptions.gets(conn, "church", church_id), "history_starts": mailings.history_starts(conn),
             "contact": contact_label(default_name, len(reps))}

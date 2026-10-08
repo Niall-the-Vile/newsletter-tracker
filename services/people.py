@@ -1,13 +1,11 @@
 """People & Churches list (members only for now), detail pane data, bulk Set Fund, Remove and Restore."""
 from data import activity
 from data.connection import now, require_writable, transaction
-from services import backup, churches
+from services import backup, churches, mailings, subscriptions
+from services.subscriptions import PENDING_NOTE  # noqa: F401  (also used by the old-subscription review)
 
 REMOVE_TYPED_OVER = 10
 NO_FUND = 0  # fund filter value: people without a fund (real fund ids start at 1)
-PENDING_NOTE = "legacy import default, pending review"
-
-_PLAIN_DELIVERY = {"Print": "Mail", "Email": "Email", "Both": "Both"}
 
 _COPIES = "n.name || CASE WHEN s.quantity > 1 THEN ' (' || s.quantity || ' copies)' ELSE '' END"
 
@@ -82,25 +80,30 @@ def person_detail(conn, person_id):
         (person_id,)).fetchone()
     if person is None:
         return None
-    subs = conn.execute(
-        "SELECT n.name, s.quantity, s.delivery, s.active, (s.active = 0 AND s.notes = ?) AS pending "
-        "FROM subscriptions_v2 s JOIN newsletters n ON n.id = s.newsletter_id "
-        "WHERE s.person_id = ? ORDER BY s.active DESC, n.name", (PENDING_NOTE, person_id)).fetchall()
-    gets = [{"newsletter": r["name"], "copies": r["quantity"], "delivery": _PLAIN_DELIVERY[r["delivery"]],
-             "pending": bool(r["pending"])} for r in subs if r["active"] or r["pending"]]
-    if not subs:
-        gets = [{"newsletter": r["name"], "copies": r["quantity"], "delivery": "Mail", "pending": False}
+    if subscriptions.has_any(conn, "person", person_id):
+        gets = subscriptions.gets(conn, "person", person_id)
+    else:
+        gets = [{"sub_id": None, "newsletter_id": None, "newsletter": r["name"], "copies": r["quantity"],
+                 "delivery": "Mail", "pending": False, "last_sent": ""}
                 for r in conn.execute(
                     "SELECT n.name, s.quantity FROM subscriptions s JOIN newsletters n ON n.id = s.newsletter_id "
                     "WHERE s.person_id = ? AND s.active = 1 ORDER BY n.name", (person_id,))]
-    history = conn.execute(
-        "SELECT ts, summary FROM activity_log WHERE entity_type = 'person' AND entity_id = ? "
-        "ORDER BY id DESC LIMIT 20", (person_id,)).fetchall()
-    first_run = conn.execute("SELECT MIN(sent_on) FROM mailing_runs").fetchone()[0]
+    history = mailings.history(conn, "person", person_id, 20)
+    first_run = mailings.history_starts(conn)
     return {"person": person, "gets": gets, "history": history, "history_starts": first_run}
 
 
 # ---------- Bulk changes ----------
+
+def set_returned_mail(conn, kind, entity_id, returned):
+    """Flags (or clears) mail that came back from this person's or church's address."""
+    require_writable(conn)
+    table = "people" if kind == "person" else "churches"
+    with transaction(conn):
+        conn.execute(f"UPDATE {table} SET returned_mail = ? WHERE id = ?", (1 if returned else 0, entity_id))
+        activity.log(conn, "mail.returned" if returned else "mail.returned_cleared",
+                     "Mail was returned" if returned else "Returned-mail flag cleared", kind, entity_id)
+
 
 def _unique(ids):
     return list(dict.fromkeys(int(i) for i in ids))

@@ -4,6 +4,7 @@ from tkinter import messagebox, ttk
 
 from data.connection import ConflictError, ReadOnlyError
 from services import churches, people
+from ui.subscriptions_box import SubscriptionsBox
 
 STAR = "★"
 
@@ -72,14 +73,26 @@ class ChurchDetail(ttk.Frame):
         for text, cmd in ((f"Make default {STAR}", self.make_default), ("Add rep...", self.add_rep),
                           ("Remove rep", self.remove_rep), ("Move...", self.move_rep)):
             ttk.Button(row, text=text, command=cmd).pack(side="left", padx=(0, 4))
-        ttk.Label(self, text="History", font=("", 10, "bold")).pack(anchor="w", pady=(8, 0))
-        self.d_history = tk.Listbox(self, height=6, activestyle="none")
+        self.returned_btn = ttk.Button(self, text="Mark mail returned", command=self.toggle_returned)
+        self.returned_btn.pack(anchor="w", pady=(6, 0))
+        tabs = ttk.Notebook(self)
+        tabs.pack(fill="both", expand=True, pady=(6, 0))
+        self.subs_box = SubscriptionsBox(tabs, conn, self.after_change)
+        history = ttk.Frame(tabs, padding=4)
+        self.d_history = tk.Listbox(history, height=6, activestyle="none")
         self.d_history.pack(fill="both", expand=True, pady=(2, 4))
+        self.d_note = ttk.Label(history, text="", foreground="#666666", wraplength=300)
+        self.d_note.pack(anchor="w")
+        tabs.add(self.subs_box, text="What they get")
+        tabs.add(history, text="History")
 
     def show(self, church_id):
         self.church_id = church_id
         self.reps_tree.delete(*self.reps_tree.get_children())
         self.d_history.delete(0, "end")
+        self.d_note.config(text="")
+        self.subs_box.show("church", None, [])
+        self.returned_btn.state(["disabled"])
         d = churches.church_detail(self.conn, church_id) if church_id else None
         if d is None:
             self.d_name.config(text="")
@@ -91,7 +104,10 @@ class ChurchDetail(ttk.Frame):
         place = ", ".join(filter(None, [c["city"], c["state"]]))
         self.d_info.config(text="\n".join(filter(None, [
             f"Church  |  Fund: {c['fund_name'] or 'none'}", c["conference"], place,
-            f"{d['members']} members linked"])))
+            f"{d['members']} members linked", "Mail was returned from this church's address." if c["returned_mail"] else ""])))
+        self.returned_btn.config(text="Clear returned-mail flag" if c["returned_mail"] else "Mark mail returned")
+        self.returned_btn.state(["!disabled"])
+        self.subs_box.show("church", church_id, d["gets"])
         self.d_contact.config(text=f"Mailing contact: {d['contact']}")
         for r in d["reps"]:
             self.reps_tree.insert("", "end", iid=str(r["person_id"]), values=(
@@ -99,6 +115,9 @@ class ChurchDetail(ttk.Frame):
                 r["title"] or ""))
         for h in d["history"]:
             self.d_history.insert("end", f"{h['ts'][:10]}  {h['summary']}")
+        starts = d["history_starts"]
+        self.d_note.config(text=f"History starts {starts}." if starts
+                           else "History starts with the first mailing made in this program.")
 
     def _selected_rep(self):
         sel = self.reps_tree.selection()
@@ -116,6 +135,13 @@ class ChurchDetail(ttk.Frame):
     def after_change(self):
         self.on_change()
         self.show(self.church_id)
+
+    def toggle_returned(self):
+        if self.church_id is None:
+            return
+        flagged = bool(self.conn.execute("SELECT returned_mail FROM churches WHERE id = ?", (self.church_id,)).fetchone()[0])
+        self._run(people.set_returned_mail, "church", self.church_id, not flagged)
+        self.after_change()
 
     def make_default(self):
         pid = self._selected_rep()

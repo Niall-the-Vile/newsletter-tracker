@@ -41,10 +41,12 @@ folder, but they should all be pointed at the **same** `.db` file for the data t
 
 - **Recipients tab** â€” add, edit, search, and filter your master list of people. Each person
   has a Type (Member / Rep / Other).
-- **Newsletters tab** â€” pick a newsletter on the left to see its recipient list, quantities, and
-  the total copies needed. Use "Add Recipients..." to subscribe people from your master list,
-  double-click a row to edit its quantity, and "Export Mailing List (CSV)" to get a
-  print/mail-merge-ready file (name, address, church, quantity).
+- **Mailings tab** — "Create mailing..." asks for the newsletter and an issue label, shows a summary
+  with the problems to fix and who was left out (and why), then saves the CSV sheet. The mailing is
+  only recorded once the file has saved. Open a past mailing to see its addresses, save the exact
+  same file again, or get a packing sheet by state and church.
+- **Setup > Newsletters** — add and rename newsletters, limit one to a fund, archive or delete.
+  Each person's or church's copies and delivery are changed in the People & Churches detail pane.
 - **Import tab** â€” bring in an existing CSV or Excel mailing list. It auto-detects the columns
   used in your existing files (Master/CLP-style "First Name/Last Name/Address 1/..." or the
   "Our Health" quarterly export style "Name/PrimaryAddressLine1/..."). Matching people (same

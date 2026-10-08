@@ -15,7 +15,7 @@ def load(path):
 
 def counts(conn):
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            for t in ("people", "churches", "activity_log", "subscriptions")}
+            for t in ("people", "churches", "activity_log", "subscriptions_v2")}
 
 
 def file_hash(path):
@@ -125,11 +125,11 @@ def test_subscribe_needs_an_explicit_newsletter(conn, tmp_path):
         run(conn, path, subscribe=True)
     assert counts(conn)["people"] == 0
     run(conn, path)
-    assert counts(conn)["subscriptions"] == 0  # off by default
+    assert counts(conn)["subscriptions_v2"] == 0  # off by default
     db.add_newsletter(conn, "Fake Letter")
     nid = conn.execute("SELECT id FROM newsletters WHERE name = 'Fake Letter'").fetchone()[0]
     run(conn, path, subscribe=True, newsletter_id=nid, quantity=2)
-    assert counts(conn)["subscriptions"] == 5
+    assert counts(conn)["subscriptions_v2"] == 5
 
 
 def test_cp1252_csv_zip_plus_4_and_zero_padded_zips(conn, tmp_path):

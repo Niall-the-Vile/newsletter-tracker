@@ -172,7 +172,21 @@ def _v4():
     ]
 
 
-STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4())]
+def _v5():
+    return [
+        "ALTER TABLE people ADD COLUMN returned_mail INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE churches ADD COLUMN returned_mail INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE mailing_run_rows ADD COLUMN first_name TEXT",
+        "ALTER TABLE mailing_run_rows ADD COLUMN middle_name TEXT",
+        "ALTER TABLE mailing_run_rows ADD COLUMN last_name TEXT",
+        "ALTER TABLE mailing_run_rows ADD COLUMN recipient_type TEXT",
+        "CREATE INDEX idx_run_rows_person ON mailing_run_rows(person_id)",
+        "CREATE INDEX idx_run_rows_church ON mailing_run_rows(church_id)",
+        "CREATE INDEX idx_runs_newsletter ON mailing_runs(newsletter_id)",
+    ]
+
+
+STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4()), (5, _v5())]
 SCHEMA_VERSION = STEPS[-1][0]
 
 

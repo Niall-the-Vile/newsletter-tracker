@@ -1,7 +1,6 @@
 import pytest
 
 import db
-import exporter
 from data import activity
 from data.connection import ReadOnlyError
 from services import backup, funds, people, startup
@@ -156,7 +155,6 @@ def test_removed_people_are_left_out_of_subscriber_lists_and_exports(conn, tmp_p
     assert db.subscription_totals(conn, nl) == (3, 6)
     assert ids[0] not in [r["id"] for r in db.people_not_subscribed(conn, nl)]
     people.remove_people(conn, ids[1:2])
-    assert exporter.export_newsletter_csv(conn, nl, str(tmp_path / "out.csv")) == 2
     removed_unsubscribed = add_people(conn, 1, last_name="Gone")[0]
     people.remove_people(conn, [removed_unsubscribed])
     assert removed_unsubscribed not in [r["id"] for r in db.people_not_subscribed(conn, nl)]
