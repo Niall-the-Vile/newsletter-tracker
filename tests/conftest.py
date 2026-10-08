@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 
@@ -11,11 +12,39 @@ from services import startup  # noqa: E402
 from tests import factories  # noqa: E402
 
 
+def _real_settings_file():
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+    return os.path.join(base, "NewsletterTracker", "config.json")
+
+
+REAL_SETTINGS = _real_settings_file()  # read once at import, before any test redirects the profile
+
+
+def _fingerprint(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_profile_untouched():
+    before = _fingerprint(REAL_SETTINGS)
+    yield
+    assert _fingerprint(REAL_SETTINGS) == before, "a test changed the real per-user settings file"
+
+
 @pytest.fixture(autouse=True)
 def sandbox(tmp_path, monkeypatch):
-    """Keeps backups and settings inside the test's temp folder."""
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    """Every per-user location points inside the test's temp folder."""
+    home = tmp_path / "home"
+    home.mkdir()
+    for name, value in (("LOCALAPPDATA", tmp_path / "local"), ("APPDATA", tmp_path / "roaming"),
+                        ("HOME", home), ("USERPROFILE", home)):
+        monkeypatch.setenv(name, str(value))
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
 
 
 @pytest.fixture(scope="session")

@@ -1,5 +1,6 @@
 """Milestone G: speed, structure, data-health banner, Get started, plain words and diagnostics. Fake data only."""
 import inspect
+import os
 import re
 import sqlite3
 import time
@@ -281,5 +282,12 @@ def test_help_menu_copies_diagnostics_to_the_clipboard(root, session):
     app.destroy()
 
 
-def test_settings_file_stays_inside_the_test_sandbox(tmp_path):
-    assert config.config_path().startswith(str(tmp_path))
+def test_every_per_user_location_stays_inside_the_test_sandbox(tmp_path):
+    from tests.conftest import REAL_SETTINGS
+    inside = str(tmp_path)
+    for place in (config.config_path(), config.local_backup_dir(), os.path.expanduser("~"),
+                  os.environ["APPDATA"], os.environ["LOCALAPPDATA"], os.environ["USERPROFILE"]):
+        assert os.path.abspath(place).startswith(inside), place
+    assert os.path.abspath(REAL_SETTINGS) != os.path.abspath(config.config_path())
+    config.set_flag("sandbox_check")
+    assert os.path.exists(config.config_path())
