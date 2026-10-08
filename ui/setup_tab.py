@@ -1,10 +1,11 @@
-"""Setup tab: Funds, Old subscriptions (the owner's review), Activity. App adds Import between them."""
+"""Setup tab: Funds, Old subscriptions (the owner's review), Church grouping, Activity. App adds Import before Activity."""
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 import db
 from data import activity
 from services import funds, people, review
+from ui.grouping_panel import GroupingPanel
 
 NO_NEWSLETTER = "No newsletter (do not subscribe them)"
 
@@ -219,13 +220,15 @@ class ActivityPanel(ttk.Frame):
 
 
 class SetupTab(ttk.Notebook):
-    def __init__(self, master, conn):
+    def __init__(self, master, conn, on_changed=None):
         super().__init__(master)
         self.funds_panel = FundsPanel(self, conn)
         self.review_panel = ReviewPanel(self, conn)
+        self.grouping_panel = GroupingPanel(self, conn, on_changed)
         self.activity_panel = ActivityPanel(self, conn)
         self.add(self.funds_panel, text="Funds")
         self.add(self.review_panel, text="Old subscriptions")
+        self.add(self.grouping_panel, text="Church grouping")
         self.add(self.activity_panel, text="Activity")
         self.bind("<<NotebookTabChanged>>", lambda e: self.refresh())
 

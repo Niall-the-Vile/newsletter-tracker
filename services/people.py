@@ -1,7 +1,7 @@
 """People & Churches list (members only for now), detail pane data, bulk Set Fund, Remove and Restore."""
 from data import activity
 from data.connection import now, require_writable, transaction
-from services import backup
+from services import backup, churches
 
 REMOVE_TYPED_OVER = 10
 NO_FUND = 0  # fund filter value: people without a fund (real fund ids start at 1)
@@ -168,6 +168,8 @@ def _set_active(conn, ids, active, action, word, reason):
                 "UPDATE people SET active = ?, updated_at = ? WHERE id = ? AND COALESCE(active, 1) <> ?",
                 (active, ts, pid, active))
             if cur.rowcount:
+                if not active:
+                    churches.person_removed(conn, pid)
                 activity.log(conn, action, f"{word} a person", "person", pid, batch)
                 done += 1
         activity.set_summary(conn, batch, f"{word} {done} people")

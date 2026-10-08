@@ -4,11 +4,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
 import db
-import importer
 import exporter
-from data import activity
-from services import backup
 from ui.chrome import Chrome
+from ui.import_tab import ImportTab
 from ui.people_tab import PeopleTab
 from ui.setup_tab import SetupTab
 
@@ -270,156 +268,6 @@ class NewslettersTab(ttk.Frame):
         messagebox.showinfo("Exported", f"Wrote {count} recipient(s) to:\n{path}")
 
 
-class ImportTab(ttk.Frame):
-    def __init__(self, master, conn, on_imported=None):
-        super().__init__(master, padding=12)
-        self.conn = conn
-        self.on_imported = on_imported
-        self.rows = []
-        self.mapping = {}
-        self._build()
-
-    def _build(self):
-        ttk.Label(self, text="Import recipients from an existing CSV or Excel mailing list.",
-                  font=("", 10, "bold")).pack(anchor="w")
-        ttk.Label(self, text="Matching people (same name + address) are updated instead of duplicated.").pack(
-            anchor="w", pady=(0, 10))
-
-        ttk.Button(self, text="Choose File...", command=self.choose_file).pack(anchor="w")
-
-        self.mapping_label = ttk.Label(self, text="", justify="left")
-        self.mapping_label.pack(anchor="w", pady=10)
-
-        preview_frame = ttk.Frame(self)
-        preview_frame.pack(fill="both", expand=True)
-        self.preview_tree = ttk.Treeview(preview_frame, show="headings", height=8)
-        pv_vsb = ttk.Scrollbar(preview_frame, orient="vertical", command=self.preview_tree.yview)
-        pv_hsb = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.preview_tree.xview)
-        self.preview_tree.configure(yscrollcommand=pv_vsb.set, xscrollcommand=pv_hsb.set)
-        self.preview_tree.grid(row=0, column=0, sticky="nsew")
-        pv_vsb.grid(row=0, column=1, sticky="ns")
-        pv_hsb.grid(row=1, column=0, sticky="ew")
-        preview_frame.rowconfigure(0, weight=1)
-        preview_frame.columnconfigure(0, weight=1)
-
-        assign_frame = ttk.Frame(self)
-        assign_frame.pack(fill="x", pady=10)
-        self.assign_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(assign_frame, text="Also subscribe all imported people to:",
-                         variable=self.assign_var).pack(side="left")
-        self.newsletter_var = tk.StringVar()
-        self.newsletter_box = ttk.Combobox(assign_frame, textvariable=self.newsletter_var,
-                                            state="readonly", width=25)
-        self.newsletter_box.pack(side="left", padx=6)
-        ttk.Label(assign_frame, text="Qty each:").pack(side="left", padx=(10, 2))
-        self.assign_qty_var = tk.StringVar(value="1")
-        ttk.Spinbox(assign_frame, from_=1, to=999, textvariable=self.assign_qty_var, width=5).pack(side="left")
-
-        self.import_btn = ttk.Button(self, text="Import", command=self.do_import, state="disabled")
-        self.import_btn.pack(anchor="w")
-
-        self.refresh_newsletter_choices()
-
-    def refresh_newsletter_choices(self):
-        self.newsletters = db.list_newsletters(self.conn)
-        self.newsletter_box["values"] = [nl["name"] for nl in self.newsletters]
-        if self.newsletters:
-            self.newsletter_var.set(self.newsletters[0]["name"])
-
-    def choose_file(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Mailing lists", "*.csv *.xlsx *.xlsm"), ("All files", "*.*")]
-        )
-        if not path:
-            return
-        try:
-            headers, rows = importer.load_file(path)
-        except PermissionError:
-            messagebox.showerror(
-                "File is in use",
-                f"Windows won't let this program read:\n{path}\n\n"
-                "This almost always means the file is currently open in Excel (or another "
-                "program). Close it there, then click Choose File... again.",
-            )
-            return
-        except Exception as e:
-            messagebox.showerror("Could not read file", str(e))
-            return
-        self.mapping = importer.build_mapping(headers)
-        self.rows = rows
-
-        name_cols = {"first_name", "last_name", "full_name"}
-        if not (name_cols & self.mapping.keys()) and "church_name" not in self.mapping:
-            messagebox.showerror("No name column found",
-                                  "Couldn't find a Name / First Name / Last Name / Church Name column in this file.")
-            self.import_btn.config(state="disabled")
-            return
-
-        mapped_desc = ", ".join(f"{field} ← {header}" for field, header in self.mapping.items())
-        self.mapping_label.config(text=f"Loaded {len(rows)} row(s) from {os.path.basename(path)}\n"
-                                        f"Detected columns: {mapped_desc}")
-
-        preview_cols = list(self.mapping.keys())
-        self.preview_tree.delete(*self.preview_tree.get_children())
-        self.preview_tree["columns"] = preview_cols
-        for col in preview_cols:
-            self.preview_tree.heading(col, text=col)
-            self.preview_tree.column(col, width=100, anchor="w")
-        for row in rows[:20]:
-            mapped = importer.map_row(row, self.mapping)
-            self.preview_tree.insert("", "end", values=[mapped.get(c, "") for c in preview_cols])
-
-        self.import_btn.config(state="normal")
-
-    def do_import(self):
-        newsletter_id = None
-        if self.assign_var.get() and self.newsletter_var.get():
-            match = next((nl for nl in self.newsletters if nl["name"] == self.newsletter_var.get()), None)
-            newsletter_id = match["id"] if match else None
-        try:
-            qty = max(1, int(self.assign_qty_var.get()))
-        except ValueError:
-            qty = 1
-
-        backup.backup_both(self.conn.db_path, "before-import")
-        with db.transaction(self.conn):
-            added, updated = self._import_rows(newsletter_id, qty)
-            activity.log(self.conn, "import", f"Imported {added} new and {updated} updated")
-
-        messagebox.showinfo("Import complete", f"Added {added} new, updated {updated} existing recipient(s).")
-        if self.on_imported:
-            self.on_imported()
-
-    def _import_rows(self, newsletter_id, qty):
-        added, updated = 0, 0
-        for row in self.rows:
-            mapped = importer.map_row(row, self.mapping)
-            if not mapped.get("first_name") and not mapped.get("last_name"):
-                if mapped.get("church_name"):
-                    # No named contact on file yet -- use the church itself as the recipient.
-                    mapped["last_name"] = mapped["church_name"]
-                else:
-                    continue
-            existing = db.find_duplicate_person(
-                self.conn, mapped.get("first_name"), mapped.get("last_name"),
-                mapped.get("address1"), mapped.get("zip"),
-            )
-            if existing:
-                person_id = db.upsert_person(self.conn, mapped, existing["id"])
-                updated += 1
-            else:
-                mapped.setdefault("recipient_type", "Church" if not mapped.get("first_name") else "Member")
-                mapped["active"] = 1
-                person_id = db.upsert_person(self.conn, mapped)
-                added += 1
-            if newsletter_id:
-                if existing and db.is_subscribed(self.conn, person_id, newsletter_id):
-                    pass  # keep the existing, possibly custom, quantity
-                else:
-                    db.add_subscription(self.conn, person_id, newsletter_id, qty)
-        return added, updated
-
-
 class App(ttk.Frame):
     def __init__(self, master, session):
         super().__init__(master)
@@ -441,9 +289,9 @@ class App(ttk.Frame):
 
         self.people_tab = PeopleTab(notebook, conn, self.find_var)
         self.mailings_tab = NewslettersTab(notebook, conn)
-        self.setup_tab = SetupTab(notebook, conn)
+        self.setup_tab = SetupTab(notebook, conn, on_changed=self.people_tab.refresh)
         self.import_tab = ImportTab(self.setup_tab, conn, on_imported=self.people_tab.refresh)
-        self.setup_tab.insert(2, self.import_tab, text="Import")
+        self.setup_tab.insert(3, self.import_tab, text="Import")
 
         notebook.add(self.people_tab, text="People & Churches")
         notebook.add(self.mailings_tab, text="Mailings")

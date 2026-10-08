@@ -7,7 +7,9 @@ Handles the two header styles already in use:
     PrimaryState, PrimaryZip
 """
 import csv
+import io
 import os
+import re
 
 FIELD_ALIASES = {
     "first_name": ["first name", "first", "firstname"],
@@ -26,6 +28,7 @@ FIELD_ALIASES = {
     "conference": ["conference"],
     "title": ["title"],
     "verified": ["verified"],
+    "fund": ["fund"],
     "source": ["source"],
 }
 
@@ -46,12 +49,19 @@ def build_mapping(headers):
     return mapping
 
 
+SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "2nd", "3rd"}
+
+
 def read_csv_rows(path):
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        headers = reader.fieldnames or []
-        rows = [row for row in reader]
-    return headers, rows
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")  # Excel's "CSV" on Windows
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    headers = reader.fieldnames or []
+    return headers, [row for row in reader]
 
 
 def read_xlsx_rows(path):
@@ -79,6 +89,53 @@ def load_file(path):
         raise ValueError(f"Unsupported file type: {ext}")
 
 
+def normalize_zip(val):
+    """Five digits (zero-padded), or ZIP+4 as 12345-6789. Anything else is kept as typed."""
+    if val is None or (isinstance(val, float) and val != val):
+        return None
+    text = str(int(val)) if isinstance(val, (int, float)) else str(val).strip()
+    digits = re.sub(r"\D", "", text)
+    if re.fullmatch(r"\d{1,5}", text):
+        return text.zfill(5)
+    if len(digits) == 9 and re.fullmatch(r"\d{5}[- ]?\d{4}|\d{9}", text):
+        return f"{digits[:5]}-{digits[5:]}"
+    return text
+
+
+def _is_suffix(token):
+    return token.strip(".").lower() in SUFFIXES
+
+
+def split_name(raw):
+    """'First Middle Last', 'Last, First', and a trailing Jr/Sr/III go to first, middle and last name."""
+    text = " ".join(str(raw).split())
+    if not text:
+        return {}
+    suffix = ""
+    if "," in text:
+        left, right = text.split(",", 1)
+        left, right = left.split(), right.replace(",", " ").split()
+        if right and _is_suffix(right[-1]) and len(right) > 1:
+            suffix = right.pop()
+        if left and _is_suffix(left[-1]) and len(left) > 1:
+            suffix = left.pop()
+        if right:
+            first, middle, last = right[0], " ".join(right[1:]), " ".join(left)
+        else:
+            first, middle, last = "", "", " ".join(left)
+    else:
+        parts = text.split()
+        if len(parts) > 1 and _is_suffix(parts[-1]):
+            suffix = parts.pop()
+        first = parts[0]
+        last = parts[-1] if len(parts) > 1 else ""
+        middle = " ".join(parts[1:-1])
+    if suffix and last:
+        last = f"{last} {suffix}"
+    out = {"first_name": first, "middle_name": middle, "last_name": last}
+    return {k: v for k, v in out.items() if v}
+
+
 def map_row(row, mapping):
     """Converts one raw row (dict keyed by original header) into a people-table dict."""
     out = {}
@@ -86,23 +143,15 @@ def map_row(row, mapping):
         if field == "full_name":
             continue
         val = row.get(header)
-        if field == "zip" and isinstance(val, (int, float)) and val == val:
-            out[field] = str(int(val)).zfill(5)
+        if field == "zip":
+            out[field] = normalize_zip(val)
         else:
             out[field] = str(val).strip() if val is not None else None
 
     if "full_name" in mapping and not out.get("first_name") and not out.get("last_name"):
         raw = row.get(mapping["full_name"])
         if raw:
-            parts = str(raw).strip().split()
-            if len(parts) == 1:
-                out["first_name"] = parts[0]
-            elif len(parts) == 2:
-                out["first_name"], out["last_name"] = parts
-            elif len(parts) > 2:
-                out["first_name"] = parts[0]
-                out["middle_name"] = " ".join(parts[1:-1])
-                out["last_name"] = parts[-1]
+            out.update(split_name(raw))
 
     # Normalize blank strings to None
     for k, v in list(out.items()):

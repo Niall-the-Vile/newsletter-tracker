@@ -165,7 +165,14 @@ def _v3():
     return stmts
 
 
-STEPS = [(1, _v1()), (2, _v2()), (3, _v3())]
+def _v4():
+    return [
+        "ALTER TABLE people ADD COLUMN church_id INTEGER REFERENCES churches(id)",
+        "CREATE INDEX idx_people_church ON people(church_id)",
+    ]
+
+
+STEPS = [(1, _v1()), (2, _v2()), (3, _v3()), (4, _v4())]
 SCHEMA_VERSION = STEPS[-1][0]
 
 

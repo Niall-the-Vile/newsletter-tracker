@@ -100,3 +100,29 @@ def test_live_copy_everyone_gets_a_fund_in_one_batch_and_review_list_matches(cop
     c = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
     assert c.execute("SELECT * FROM subscriptions ORDER BY id").fetchall() == legacy_before
     c.close()
+
+
+def test_live_copy_church_grouping_dry_run_writes_nothing_and_confirm_can_be_undone(copy):
+    from services import grouping
+    s = startup.open_session(copy)
+    try:
+        conn = s.conn
+        before = (conn.execute("SELECT COUNT(*) FROM churches").fetchone()[0],
+                  conn.execute("SELECT COUNT(*) FROM people WHERE church_id IS NOT NULL").fetchone()[0],
+                  conn.execute("SELECT value FROM meta WHERE key = 'data_version'").fetchone()[0])
+        summary = grouping.plan(conn)["summary"]
+        assert all(isinstance(v, int) for v in summary.values())
+        assert before == (conn.execute("SELECT COUNT(*) FROM churches").fetchone()[0],
+                          conn.execute("SELECT COUNT(*) FROM people WHERE church_id IS NOT NULL").fetchone()[0],
+                          conn.execute("SELECT value FROM meta WHERE key = 'data_version'").fetchone()[0])
+        done = grouping.apply_grouping(conn)
+        assert conn.execute("SELECT COUNT(*) FROM churches").fetchone()[0] == summary["created"] == done["created"]
+        assert conn.execute("SELECT COUNT(*) FROM people WHERE church_id IS NOT NULL").fetchone()[0] == summary["linked"]
+        if done["created"]:
+            grouping.rollback_grouping(conn, done["tag"])
+        assert conn.execute("SELECT COUNT(*) FROM churches").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM people WHERE church_id IS NOT NULL").fetchone()[0] == 0
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        s.close()

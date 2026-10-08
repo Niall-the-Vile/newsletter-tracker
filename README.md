@@ -58,3 +58,14 @@ people           one row per person (rep or member)
 newsletters      one row per publication
 subscriptions    person <-> newsletter, with a quantity (copies needed)
 ```
+
+## Churches, reps and importing
+
+- **People & Churches**: set Type to *Church* to list churches. Select one to see its reps. The star marks the main
+  contact; use *Make default* to move it. Tick *Needs attention* to list churches with several reps and no main contact.
+- **Setup > Church grouping**: checks church names (name plus conference, or state when there is no conference) and
+  shows what would be created. Nothing is saved until you press Create. Similar names can be merged by hand, and an
+  earlier run can be undone.
+- **Setup > Import**: choosing a file shows what would change (new, updated, skipped and why, similar church names,
+  ignored columns) before anything is saved. Blank cells never erase existing data, and subscribing everyone is off
+  unless you tick it and pick a newsletter.

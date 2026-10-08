@@ -50,3 +50,35 @@ def make_legacy_db(path, people=25, newsletters=2):
     conn.commit()
     conn.close()
     return people, newsletters, people
+
+
+def church_spec(i):
+    """(church name, conference) for generated row i. Of every 25 rows: 20 normal, 2 same name in two
+    conferences, 3 with no church."""
+    k = i % 25
+    if k < 19:
+        return f"Fake Church {k}", "Conf Alpha"
+    if k == 19:
+        return "Fake Chapel 18", "Conf Alpha"  # a near match of Fake Church 18
+    if k in (20, 21):
+        return "Grace Fellowship", "Conf Alpha" if k == 20 else "Conf Beta"
+    return ["None", "", "N/A"][k - 22], ""
+
+
+HEADERS = ["First Name", "Last Name", "Address 1", "City", "State", "Zip", "Email", "Church Name", "Conference",
+           "Title", "Spare Column"]
+
+
+def file_row(i):
+    church, conference = church_spec(i)
+    return [f"Pat{i}", f"Fake{i}", f"{i} Test Road", "Faketown", "PA", f"{i % 100000:05d}",
+            f"pat{i}@example.invalid", church, conference, "Pastor" if i % 10 == 0 else "", "x"]
+
+
+def write_people_csv(path, count=2000, encoding="utf-8-sig"):
+    import csv
+    with open(path, "w", newline="", encoding=encoding) as f:
+        w = csv.writer(f)
+        w.writerow(HEADERS)
+        for i in range(count):
+            w.writerow(file_row(i))

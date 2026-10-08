@@ -3,12 +3,14 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 import db
-from services import funds, people
+from services import churches, funds, people
+from ui.church_detail import ChurchDetail
 from ui.person_dialog import PersonDialog
 
 CHIP_COLOURS = {"Mail": "#dbe9f7", "Email": "#dff2df", "Both": "#f6e0b8"}
 SEARCH_DELAY_MS = 250
 ALL_FUNDS, NO_FUND_LABEL = "All funds", "No fund"
+CHURCH = "Church"
 
 
 class SetFundDialog(tk.Toplevel):
@@ -62,16 +64,19 @@ class PeopleTab(ttk.Frame):
         self.type_box = self._combo(bar, "Type:", self.type_var, 10)
         self.fund_box = self._combo(bar, "Fund:", self.fund_var, 12)
         self.state_box = self._combo(bar, "State:", self.state_var, 6)
-        ttk.Checkbutton(bar, text="Needs attention", variable=self.attention_var,
+        ttk.Checkbutton(bar, text="Needs attention (churches: needs a default)", variable=self.attention_var,
                         command=self.refresh).pack(side="left", padx=(10, 0))
         ttk.Checkbutton(bar, text="Show removed", variable=self.removed_var,
                         command=self.refresh).pack(side="left", padx=(10, 0))
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(0, 6))
+        self.person_only = []
         ttk.Button(actions, text="Add", command=self.add_person).pack(side="left", padx=(0, 4))
-        ttk.Button(actions, text="Edit", command=self.edit_person).pack(side="left", padx=4)
-        ttk.Button(actions, text="Set fund...", command=self.set_fund).pack(side="left", padx=4)
+        for text, cmd in (("Edit", self.edit_person), ("Set fund...", self.set_fund)):
+            btn = ttk.Button(actions, text=text, command=cmd)
+            btn.pack(side="left", padx=4)
+            self.person_only.append(btn)
         self.remove_btn = ttk.Button(actions, text="Remove", command=self.remove)
         self.remove_btn.pack(side="left", padx=4)
         self.restore_btn = ttk.Button(actions, text="Restore", command=self.restore)
@@ -101,6 +106,9 @@ class PeopleTab(ttk.Frame):
 
         self.detail = ttk.Frame(paned, padding=(10, 0))
         paned.add(self.detail, weight=2)
+        self.person_box = ttk.Frame(self.detail)
+        self.person_box.pack(fill="both", expand=True)
+        self.church_box = ChurchDetail(self.detail, self.conn, self.refresh_list_only)
         self._build_detail()
 
     def _combo(self, bar, label, var, width):
@@ -111,23 +119,23 @@ class PeopleTab(ttk.Frame):
         return box
 
     def _build_detail(self):
-        self.d_name = ttk.Label(self.detail, text="", font=("", 12, "bold"), wraplength=300)
+        self.d_name = ttk.Label(self.person_box, text="", font=("", 12, "bold"), wraplength=300)
         self.d_name.pack(anchor="w")
-        self.d_info = ttk.Label(self.detail, text="Select a person to see their details.", justify="left",
+        self.d_info = ttk.Label(self.person_box, text="Select a person to see their details.", justify="left",
                                 wraplength=300)
         self.d_info.pack(anchor="w", pady=(2, 8))
-        ttk.Label(self.detail, text="What they get", font=("", 10, "bold")).pack(anchor="w")
-        self.gets_tree = ttk.Treeview(self.detail, columns=("news", "copies", "delivery"), show="headings", height=4)
+        ttk.Label(self.person_box, text="What they get", font=("", 10, "bold")).pack(anchor="w")
+        self.gets_tree = ttk.Treeview(self.person_box, columns=("news", "copies", "delivery"), show="headings", height=4)
         for col, head, w in (("news", "Newsletter", 130), ("copies", "Copies", 50), ("delivery", "Sent by", 60)):
             self.gets_tree.heading(col, text=head)
             self.gets_tree.column(col, width=w, anchor="w")
         for name, colour in CHIP_COLOURS.items():
             self.gets_tree.tag_configure(name, background=colour)
         self.gets_tree.pack(fill="x", pady=(2, 8))
-        ttk.Label(self.detail, text="History", font=("", 10, "bold")).pack(anchor="w")
-        self.d_history = tk.Listbox(self.detail, height=8, activestyle="none")
+        ttk.Label(self.person_box, text="History", font=("", 10, "bold")).pack(anchor="w")
+        self.d_history = tk.Listbox(self.person_box, height=8, activestyle="none")
         self.d_history.pack(fill="both", expand=True, pady=(2, 4))
-        self.d_note = ttk.Label(self.detail, text="", foreground="#666666", wraplength=300)
+        self.d_note = ttk.Label(self.person_box, text="", foreground="#666666", wraplength=300)
         self.d_note.pack(anchor="w")
 
     # ---------- data ----------
@@ -152,13 +160,16 @@ class PeopleTab(ttk.Frame):
         types, states = people.types_and_states(self.conn)
         fund_rows = funds.list_funds(self.conn)
         self._fund_ids = {f["name"]: f["id"] for f in fund_rows}
-        for box, var, values in ((self.type_box, self.type_var, ["All"] + types),
+        for box, var, values in ((self.type_box, self.type_var, ["All"] + types + [CHURCH]),
                                  (self.state_box, self.state_var, ["All"] + states),
                                  (self.fund_box, self.fund_var, [ALL_FUNDS, NO_FUND_LABEL] + list(self._fund_ids))):
             box["values"] = values
             if var.get() not in values:
                 var.set(values[0])
 
+        if self.church_mode():
+            self._refresh_churches()
+            return
         removed = self.removed_var.get()
         rows = people.list_people(self.conn, self.find_var.get().strip(), self.type_var.get(), self._fund_filter(),
                                   self.state_var.get(), self.attention_var.get(), removed)
@@ -169,9 +180,38 @@ class PeopleTab(ttk.Frame):
                 people.display_name(r["first_name"], r["last_name"]), r["recipient_type"] or "",
                 r["fund_name"] or "", "Themselves", place, r["gets"], "Both" if r["is_both"] else ""))
         self.count_label.config(text=f"{len(rows)} {'removed ' if removed else ''}people shown")
+        self.person_buttons(True)
         self.remove_btn.state(["disabled"] if removed else ["!disabled"])
         self.restore_btn.state(["!disabled"] if removed else ["disabled"])
         self.show_detail()
+
+    def church_mode(self):
+        return self.type_var.get() == CHURCH
+
+    def person_buttons(self, on):
+        for b in self.person_only + [self.remove_btn, self.restore_btn]:
+            b.state(["!disabled"] if on else ["disabled"])
+
+    def _refresh_churches(self):
+        rows = churches.list_churches(self.conn, self.find_var.get().strip(), self.state_var.get(),
+                                      self._fund_filter(), self.attention_var.get())
+        self.tree.delete(*self.tree.get_children())
+        for r in rows:
+            place = ", ".join(filter(None, [r["city"], r["state"]]))
+            self.tree.insert("", "end", iid=str(r["id"]), values=(
+                r["name"], CHURCH, r["fund_name"] or "", churches.contact_label(r["default_name"], r["rep_count"]),
+                place, f"{r['rep_count']} reps, {r['member_count']} members", ""))
+        self.count_label.config(text=f"{len(rows)} churches shown")
+        self.person_buttons(False)
+        self.show_detail()
+
+    def refresh_list_only(self):
+        """After a change in the church pane: redraw the list and keep the same church selected."""
+        keep = self.tree.selection()
+        self.refresh()
+        keep = [i for i in keep if self.tree.exists(i)]
+        if keep:
+            self.tree.selection_set(keep)
 
     def selected_ids(self):
         return [int(i) for i in self.tree.selection()]
@@ -181,6 +221,12 @@ class PeopleTab(ttk.Frame):
 
     def show_detail(self):
         ids = self.selected_ids()
+        church = self.church_mode()
+        (self.person_box.pack_forget if church else self.church_box.pack_forget)()
+        (self.church_box if church else self.person_box).pack(fill="both", expand=True)
+        if church:
+            self.church_box.show(ids[0] if len(ids) == 1 else None)
+            return
         self.gets_tree.delete(*self.gets_tree.get_children())
         self.d_history.delete(0, "end")
         self.d_note.config(text="")
