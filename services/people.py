@@ -169,8 +169,30 @@ def remove_people(conn, person_ids, confirm_count=None):
 
 
 def restore_people(conn, person_ids):
+    return restore_people_report(conn, person_ids)["restored"]
+
+
+def restore_people_report(conn, person_ids):
+    """Restores people and puts them back as reps of the churches their removal ended."""
     require_writable(conn)
-    return _set_active(conn, _unique(person_ids), 1, "person.restore", "Restored", "before-restore-people")
+    report = {"restored": 0, "relinked": [], "not_relinked": 0}
+    ids = _unique(person_ids)
+    if len(ids) > 1:
+        backup.backup_both(conn.db_path, "before-restore-people")
+    ts = now()
+    with transaction(conn):
+        batch = activity.log(conn, "person.restore_bulk", f"Restored {len(ids)} people")
+        for pid in ids:
+            cur = conn.execute(
+                "UPDATE people SET active = 1, updated_at = ? WHERE id = ? AND COALESCE(active, 1) <> 1", (ts, pid))
+            if cur.rowcount:
+                lid = activity.log(conn, "person.restore", "Restored a person", "person", pid, batch)
+                linked, skipped = churches.person_restored(conn, pid, lid)
+                report["relinked"] += linked
+                report["not_relinked"] += skipped
+                report["restored"] += 1
+        activity.set_summary(conn, batch, f"Restored {report['restored']} people")
+    return report
 
 
 def _set_active(conn, ids, active, action, word, reason):
@@ -184,9 +206,8 @@ def _set_active(conn, ids, active, action, word, reason):
                 "UPDATE people SET active = ?, updated_at = ? WHERE id = ? AND COALESCE(active, 1) <> ?",
                 (active, ts, pid, active))
             if cur.rowcount:
-                if not active:
-                    churches.person_removed(conn, pid)
-                activity.log(conn, action, f"{word} a person", "person", pid, batch)
+                lid = activity.log(conn, action, f"{word} a person", "person", pid, batch)
+                churches.person_removed(conn, pid, lid)
                 done += 1
         activity.set_summary(conn, batch, f"{word} {done} people")
     return done

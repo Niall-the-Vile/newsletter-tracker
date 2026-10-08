@@ -161,11 +161,29 @@ def move_rep(conn, person_id, from_church_id, to_church_id, new_default_id=None)
         return outcome
 
 
-def person_removed(conn, person_id):
+def person_removed(conn, person_id, parent_id=None):
     """Called when a person is removed. Several reps left and no way to ask means the church needs a default."""
     for r in conn.execute("SELECT church_id FROM church_reps WHERE person_id = ? AND active = 1",
                           (person_id,)).fetchall():
-        _end_link(conn, r["church_id"], person_id, None, ask=False)
+        _end_link(conn, r["church_id"], person_id, None, ask=False, parent_id=parent_id)
+
+
+def person_restored(conn, person_id, parent_id=None):
+    """Re-links the churches this person's last removal ended. Returns (church names re-linked, count not re-linked)."""
+    removal = conn.execute("SELECT id FROM activity_log WHERE action = 'person.remove' AND entity_type = 'person' "
+                           "AND entity_id = ? ORDER BY id DESC LIMIT 1", (person_id,)).fetchone()
+    if removal is None:
+        return [], 0
+    linked, skipped = [], 0
+    for r in conn.execute("SELECT entity_id FROM activity_log WHERE action = 'church.rep_end' AND parent_id = ? "
+                          "ORDER BY id", (removal["id"],)).fetchall():
+        church = conn.execute("SELECT name, active FROM churches WHERE id = ?", (r["entity_id"],)).fetchone()
+        if church is None or not church["active"] or _link(conn, r["entity_id"], person_id):
+            skipped += 1
+            continue
+        add_rep(conn, r["entity_id"], person_id, parent_id=parent_id)
+        linked.append(church["name"])
+    return linked, skipped
 
 
 # ---------- lists ----------

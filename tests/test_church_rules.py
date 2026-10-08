@@ -140,3 +140,20 @@ def test_rule_changes_are_logged(conn):
     churches.make_default(conn, ch, b)
     actions = [r[0] for r in conn.execute("SELECT action FROM activity_log WHERE entity_type = 'church'")]
     assert actions.count("church.rep_add") == 2 and "church.make_default" in actions
+
+
+def test_restoring_a_removed_person_relinks_the_churches_the_removal_ended(conn):
+    ch, gone, other = make_church(conn, "Church A"), make_church(conn, "Church B"), make_church(conn, "Church C")
+    a, b = make_person(conn, 1), make_person(conn, 2)
+    for c in (ch, gone, other):
+        churches.add_rep(conn, c, a)
+    churches.add_rep(conn, ch, b)
+    churches.remove_rep(conn, other, a)  # ended earlier by staff, not by the removal
+    conn.execute("UPDATE churches SET active = 0 WHERE id = ?", (gone,))
+    people.remove_people(conn, [a])
+    assert reps_of(conn, ch) == [b]
+    report = people.restore_people_report(conn, [a])
+    assert report["restored"] == 1 and report["relinked"] == ["Church A"] and report["not_relinked"] == 1
+    assert reps_of(conn, ch) == [a, b] and reps_of(conn, ch, default=True) == [b]
+    assert reps_of(conn, other) == []
+    assert people.restore_people(conn, [a]) == 0

@@ -344,5 +344,10 @@ class PeopleTab(ttk.Frame):
         if not ids:
             messagebox.showinfo("Select people", "Choose one or more people first.")
             return
-        people.restore_people(self.conn, ids)
+        report = people.restore_people_report(self.conn, ids)
+        if report["relinked"]:
+            messagebox.showinfo("Restored", "They are reps again at: " + ", ".join(report["relinked"]) + ".")
+        if report["not_relinked"]:
+            messagebox.showinfo("Restored", "Some churches they used to represent could not be linked again "
+                                "(the church is gone or they are already a rep). Add them back as a rep there if needed.")
         self.refresh()
