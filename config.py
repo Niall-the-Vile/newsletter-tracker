@@ -6,6 +6,11 @@ CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "N
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 
+def local_backup_dir():
+    base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    return os.path.join(base, "NewsletterTracker", "backups")
+
+
 def get_saved_db_path():
     if not os.path.exists(CONFIG_PATH):
         return None

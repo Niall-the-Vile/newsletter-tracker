@@ -6,6 +6,9 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 import db
 import importer
 import exporter
+from data import activity
+from services import backup
+from ui.chrome import Chrome
 
 RECIPIENT_TYPES = ["Member", "Rep", "Church", "Other"]
 
@@ -190,8 +193,12 @@ class RecipientsTab(ttk.Frame):
             if total_nl else ""
         title = "Delete recipient" if len(ids) == 1 else "Delete recipients"
         if messagebox.askyesno(title, f"Remove {who}?{detail} This cannot be undone."):
-            for pid in ids:
-                db.delete_person(self.conn, pid)
+            backup.backup_both(self.conn.db_path, "before-delete")
+            with db.transaction(self.conn):
+                for pid in ids:
+                    db.delete_person(self.conn, pid)
+                if len(ids) > 1:
+                    activity.log(self.conn, "person.bulk_delete", f"Deleted {len(ids)} people")
             self.refresh()
 
 
@@ -558,7 +565,6 @@ class ImportTab(ttk.Frame):
         self.import_btn.config(state="normal")
 
     def do_import(self):
-        added, updated = 0, 0
         newsletter_id = None
         if self.assign_var.get() and self.newsletter_var.get():
             match = next((nl for nl in self.newsletters if nl["name"] == self.newsletter_var.get()), None)
@@ -568,6 +574,17 @@ class ImportTab(ttk.Frame):
         except ValueError:
             qty = 1
 
+        backup.backup_both(self.conn.db_path, "before-import")
+        with db.transaction(self.conn):
+            added, updated = self._import_rows(newsletter_id, qty)
+            activity.log(self.conn, "import", f"Imported {added} new and {updated} updated")
+
+        messagebox.showinfo("Import complete", f"Added {added} new, updated {updated} existing recipient(s).")
+        if self.on_imported:
+            self.on_imported()
+
+    def _import_rows(self, newsletter_id, qty):
+        added, updated = 0, 0
         for row in self.rows:
             mapped = importer.map_row(row, self.mapping)
             if not mapped.get("first_name") and not mapped.get("last_name"):
@@ -593,19 +610,17 @@ class ImportTab(ttk.Frame):
                     pass  # keep the existing, possibly custom, quantity
                 else:
                     db.add_subscription(self.conn, person_id, newsletter_id, qty)
-
-        messagebox.showinfo("Import complete", f"Added {added} new, updated {updated} existing recipient(s).")
-        if self.on_imported:
-            self.on_imported()
+        return added, updated
 
 
 class App(ttk.Frame):
-    def __init__(self, master, conn, db_path):
+    def __init__(self, master, session):
         super().__init__(master)
-        self.conn = conn
-        master.title(f"Newsletter Tracker — {db_path}")
+        conn = self.conn = session.conn
+        master.title(f"Newsletter Tracker — {session.db_path}")
         master.geometry("1000x600")
         self.pack(fill="both", expand=True)
+        self.chrome = Chrome(master, self, session)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)

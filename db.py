@@ -1,56 +1,15 @@
 """SQLite data layer for the Newsletter Tracker.
 
-Schema:
+The schema itself lives in data/migrations.py. Writes go through data.connection.transaction()
+and are logged in the same transaction.
+
+Tables:
   people        - master directory of reps/members (one row per person)
   newsletters   - the publications being tracked (e.g. "MAAP Newsletter", "Our Health")
   subscriptions - join table: which people receive which newsletter, and how many copies
 """
-import sqlite3
-from datetime import datetime, timezone
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS people (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    first_name TEXT,
-    middle_name TEXT,
-    last_name TEXT,
-    address1 TEXT,
-    address2 TEXT,
-    city TEXT,
-    state TEXT,
-    zip TEXT,
-    home_phone TEXT,
-    cell_phone TEXT,
-    email TEXT,
-    church_name TEXT,
-    conference TEXT,
-    title TEXT,
-    recipient_type TEXT DEFAULT 'Member',
-    verified TEXT,
-    notes TEXT,
-    source TEXT,
-    active INTEGER DEFAULT 1,
-    created_at TEXT,
-    updated_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS newsletters (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    description TEXT,
-    created_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS subscriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-    newsletter_id INTEGER NOT NULL REFERENCES newsletters(id) ON DELETE CASCADE,
-    quantity INTEGER DEFAULT 1,
-    active INTEGER DEFAULT 1,
-    notes TEXT,
-    UNIQUE(person_id, newsletter_id)
-);
-"""
+from data import activity
+from data.connection import connect, now, transaction  # noqa: F401  (re-exported for callers)
 
 DEFAULT_NEWSLETTERS = [
     ("MAAP Newsletter", "Sent to church reps in bulk; reps distribute copies into church mailboxes."),
@@ -63,31 +22,6 @@ PEOPLE_COLUMNS = [
     "church_name", "conference", "title", "recipient_type", "verified",
     "notes", "source", "active",
 ]
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def connect(db_path):
-    conn = sqlite3.connect(db_path, timeout=8.0)
-    conn.execute("PRAGMA busy_timeout = 8000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db(conn):
-    conn.executescript(SCHEMA)
-    conn.commit()
-    existing = {r["name"] for r in conn.execute("SELECT name FROM newsletters")}
-    for name, desc in DEFAULT_NEWSLETTERS:
-        if name not in existing:
-            conn.execute(
-                "INSERT INTO newsletters (name, description, created_at) VALUES (?, ?, ?)",
-                (name, desc, now()),
-            )
-    conn.commit()
 
 
 # ---------- People ----------
@@ -124,26 +58,26 @@ def distinct_states(conn):
 
 def upsert_person(conn, data, person_id=None):
     ts = now()
-    if person_id:
-        existing = get_person(conn, person_id)
-        merged = {
-            k: (data[k] if k in data else (existing[k] if existing else None))
-            for k in PEOPLE_COLUMNS
-        }
-        merged["updated_at"] = ts
-        set_clause = ", ".join(f"{col} = :{col}" for col in merged)
-        merged["id"] = person_id
-        conn.execute(f"UPDATE people SET {set_clause} WHERE id = :id", merged)
-        conn.commit()
-        return person_id
-    else:
+    with transaction(conn):
+        if person_id:
+            existing = get_person(conn, person_id)
+            merged = {
+                k: (data[k] if k in data else (existing[k] if existing else None))
+                for k in PEOPLE_COLUMNS
+            }
+            merged["updated_at"] = ts
+            set_clause = ", ".join(f"{col} = :{col}" for col in merged)
+            merged["id"] = person_id
+            conn.execute(f"UPDATE people SET {set_clause} WHERE id = :id", merged)
+            activity.log(conn, "person.update", "Edited a person", "person", person_id)
+            return person_id
         data = {k: data.get(k) for k in PEOPLE_COLUMNS}
         data["created_at"] = ts
         data["updated_at"] = ts
         cols = ", ".join(data.keys())
         placeholders = ", ".join(f":{k}" for k in data.keys())
         cur = conn.execute(f"INSERT INTO people ({cols}) VALUES ({placeholders})", data)
-        conn.commit()
+        activity.log(conn, "person.add", "Added a person", "person", cur.lastrowid)
         return cur.lastrowid
 
 
@@ -165,8 +99,9 @@ def find_duplicate_person(conn, first_name, last_name, address1, zip_code):
 
 
 def delete_person(conn, person_id):
-    conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
-    conn.commit()
+    with transaction(conn):
+        conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+        activity.log(conn, "person.delete", "Deleted a person", "person", person_id)
 
 
 def person_subscriptions_summary(conn, person_id):
@@ -185,24 +120,27 @@ def list_newsletters(conn):
 
 
 def add_newsletter(conn, name, description=""):
-    conn.execute(
-        "INSERT INTO newsletters (name, description, created_at) VALUES (?, ?, ?)",
-        (name, description, now()),
-    )
-    conn.commit()
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO newsletters (name, description, created_at) VALUES (?, ?, ?)",
+            (name, description, now()),
+        )
+        activity.log(conn, "newsletter.add", "Added a newsletter", "newsletter", cur.lastrowid)
 
 
 def rename_newsletter(conn, newsletter_id, new_name, description=""):
-    conn.execute(
-        "UPDATE newsletters SET name = ?, description = ? WHERE id = ?",
-        (new_name, description, newsletter_id),
-    )
-    conn.commit()
+    with transaction(conn):
+        conn.execute(
+            "UPDATE newsletters SET name = ?, description = ? WHERE id = ?",
+            (new_name, description, newsletter_id),
+        )
+        activity.log(conn, "newsletter.rename", "Renamed a newsletter", "newsletter", newsletter_id)
 
 
 def delete_newsletter(conn, newsletter_id):
-    conn.execute("DELETE FROM newsletters WHERE id = ?", (newsletter_id,))
-    conn.commit()
+    with transaction(conn):
+        conn.execute("DELETE FROM newsletters WHERE id = ?", (newsletter_id,))
+        activity.log(conn, "newsletter.delete", "Deleted a newsletter", "newsletter", newsletter_id)
 
 
 # ---------- Subscriptions ----------
@@ -258,20 +196,24 @@ def is_subscribed(conn, person_id, newsletter_id):
 
 
 def add_subscription(conn, person_id, newsletter_id, quantity=1):
-    conn.execute(
-        "INSERT INTO subscriptions (person_id, newsletter_id, quantity, active) "
-        "VALUES (?, ?, ?, 1) "
-        "ON CONFLICT(person_id, newsletter_id) DO UPDATE SET quantity=excluded.quantity, active=1",
-        (person_id, newsletter_id, quantity),
-    )
-    conn.commit()
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO subscriptions (person_id, newsletter_id, quantity, active) "
+            "VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(person_id, newsletter_id) DO UPDATE SET quantity=excluded.quantity, active=1",
+            (person_id, newsletter_id, quantity),
+        )
+        activity.log(conn, "subscription.add", f"Added to newsletter {newsletter_id}, {quantity} copies",
+                     "person", person_id)
 
 
 def update_subscription_quantity(conn, sub_id, quantity):
-    conn.execute("UPDATE subscriptions SET quantity = ? WHERE id = ?", (quantity, sub_id))
-    conn.commit()
+    with transaction(conn):
+        conn.execute("UPDATE subscriptions SET quantity = ? WHERE id = ?", (quantity, sub_id))
+        activity.log(conn, "subscription.quantity", f"Copies set to {quantity}", "subscription", sub_id)
 
 
 def remove_subscription(conn, sub_id):
-    conn.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
-    conn.commit()
+    with transaction(conn):
+        conn.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
+        activity.log(conn, "subscription.remove", "Removed from a newsletter", "subscription", sub_id)
